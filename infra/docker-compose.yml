@@ -1,5 +1,6 @@
 services:
   app:
+    image: wire-server:latest
     build:
       context: ..
       dockerfile: infra/docker/Dockerfile
@@ -49,4 +50,3 @@ services:
       - --static-auth-secret=dev-turn-secret
     ports:
       - "3478:3478"
-

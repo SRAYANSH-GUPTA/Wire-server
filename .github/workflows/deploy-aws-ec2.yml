@@ -1,0 +1,172 @@
+name: Deploy to AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+
+      - name: Install dependencies
+        run: |
+          GOCACHE=/tmp/go-build GOPATH=/tmp/go go mod download
+
+      - name: Run gofmt
+        run: gofmt -w ./cmd ./internal ./pkg
+
+      - name: Run go test
+        run: GOCACHE=/tmp/go-build GOPATH=/tmp/go go test ./...
+
+      - name: Build Docker image
+        run: |
+          docker build -t wire-server:ci -f infra/docker/Dockerfile .
+          docker save wire-server:ci | gzip > /tmp/wire-server.tar.gz
+
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp/wire-server.tar.gz
+
+  deploy:
+    name: Deploy to Production
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Docker image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp/artifacts
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
+          SSH_PASSPHRASE: ${{ secrets.EC2_SSH_KEY_PASSPHRASE }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts
+          eval "$(ssh-agent -s)"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> $GITHUB_ENV
+          if [ -n "$SSH_PASSPHRASE" ]; then
+            echo "$SSH_PASSPHRASE" | SSH_ASKPASS_REQUIRE=never ssh-add ~/.ssh/id_rsa
+          else
+            ssh-add ~/.ssh/id_rsa
+          fi
+
+      - name: Prepare deployment package
+        run: |
+          tar --exclude='.git' --exclude='.env' --exclude='*.log' --exclude='node_modules' --warning=no-file-changed -czf /tmp/app-deploy.tar.gz .
+
+      - name: Upload artifacts to EC2
+        env:
+          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          scp -o StrictHostKeyChecking=no /tmp/app-deploy.tar.gz $EC2_USERNAME@$EC2_HOST:/tmp/app-deploy.tar.gz
+          scp -o StrictHostKeyChecking=no /tmp/artifacts/wire-server.tar.gz $EC2_USERNAME@$EC2_HOST:/tmp/wire-server.tar.gz
+
+      - name: Deploy on EC2
+        env:
+          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_REGION: ${{ secrets.S3_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TURN_SECRET: ${{ secrets.TURN_SECRET }}
+          FCM_SERVER_KEY: ${{ secrets.FCM_SERVER_KEY }}
+        run: |
+          ssh -o StrictHostKeyChecking=no $EC2_USERNAME@$EC2_HOST <<'EOF'
+            set -euo pipefail
+            APP_DIR="$HOME/wire-server-app"
+            BACKUP_DIR="$HOME/wire-server-backup-$(date +%Y%m%d-%H%M%S)"
+
+            mkdir -p "$APP_DIR"
+            if [ -d "$APP_DIR" ]; then
+              cp -r "$APP_DIR" "$BACKUP_DIR"
+            fi
+
+            rm -rf "$APP_DIR"/*
+            tar -xzf /tmp/app-deploy.tar.gz -C "$APP_DIR"
+            rm /tmp/app-deploy.tar.gz
+
+            cat > "$APP_DIR/.env" <<ENV
+APP_ENV=production
+PORT=8080
+JWT_SECRET=${JWT_SECRET}
+DATABASE_URL=${DATABASE_URL}
+REDIS_URL=${REDIS_URL}
+S3_BUCKET=${S3_BUCKET}
+S3_REGION=${S3_REGION}
+AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+TURN_SECRET=${TURN_SECRET}
+FCM_SERVER_KEY=${FCM_SERVER_KEY}
+ENV
+
+            chmod 600 "$APP_DIR/.env"
+
+            docker compose -f "$APP_DIR/infra/docker-compose.yml" down || true
+
+            gunzip -c /tmp/wire-server.tar.gz | docker load
+            rm /tmp/wire-server.tar.gz
+
+            docker tag wire-server:ci wire-server:latest
+
+            docker compose -f "$APP_DIR/infra/docker-compose.yml" pull || true
+            docker compose -f "$APP_DIR/infra/docker-compose.yml" up -d --no-build
+
+            sleep 5
+            MAX_RETRIES=10
+            for i in $(seq 1 $MAX_RETRIES); do
+              if curl -fs http://localhost:8080/health > /dev/null; then
+                echo "health ok"
+                break
+              fi
+              if [ "$i" -eq "$MAX_RETRIES" ]; then
+                echo "health check failed; rolling back"
+                docker compose -f "$APP_DIR/infra/docker-compose.yml" down
+                if [ -d "$BACKUP_DIR" ]; then
+                  rm -rf "$APP_DIR"
+                  mv "$BACKUP_DIR" "$APP_DIR"
+                fi
+                exit 1
+              fi
+              sleep 2
+            done
+
+            rm -rf "$BACKUP_DIR"
+
+            docker image prune -f --filter "until=72h"
+          EOF
+
+      - name: Notify success
+        if: success()
+        run: |
+          echo "Deployment succeeded: https://${{ secrets.EC2_HOST }}"
