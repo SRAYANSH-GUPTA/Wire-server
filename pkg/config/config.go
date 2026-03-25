@@ -24,6 +24,8 @@ type GatewayConfig struct {
 	MediaServiceAddr    string
 	PresenceServiceAddr string
 	UserServiceAddr     string
+	SupabaseURL         string
+	EventBusDriver      string
 }
 
 type ChatConfig struct {
@@ -106,6 +108,8 @@ func LoadGatewayConfig() GatewayConfig {
 		MediaServiceAddr:    v.GetString("MEDIA_SERVICE_ADDR"),
 		PresenceServiceAddr: v.GetString("PRESENCE_SERVICE_ADDR"),
 		UserServiceAddr:     v.GetString("USER_SERVICE_ADDR"),
+		SupabaseURL:         v.GetString("SUPABASE_URL"),
+		EventBusDriver:      v.GetString("EVENT_BUS_DRIVER"),
 	}
 	assertNonEmpty("GATEWAY_PORT", cfg.Port)
 	assertNonEmpty("JWT_SECRET", cfg.JWTSecret)
@@ -115,6 +119,7 @@ func LoadGatewayConfig() GatewayConfig {
 	assertNonEmpty("MEDIA_SERVICE_ADDR", cfg.MediaServiceAddr)
 	assertNonEmpty("PRESENCE_SERVICE_ADDR", cfg.PresenceServiceAddr)
 	assertNonEmpty("USER_SERVICE_ADDR", cfg.UserServiceAddr)
+	assertNonEmpty("SUPABASE_URL", cfg.SupabaseURL)
 	return cfg
 }
 
