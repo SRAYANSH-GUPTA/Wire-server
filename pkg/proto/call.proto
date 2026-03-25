@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package call;
+
+option go_package = "wire-server/pkg/proto/callpb";
+
+import "google/protobuf/timestamp.proto";
+
+message InitiateCallRequest {
+  string caller_id = 1;
+  repeated string callee_ids = 2;
+  string trace_id = 3;
+}
+
+message InitiateCallResponse {
+  string call_id = 1;
+  google.protobuf.Timestamp started_at = 2;
+}
+
+message JoinCallRequest {
+  string call_id = 1;
+  string participant_id = 2;
+}
+
+message JoinCallResponse {
+  string token = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+message EndCallRequest {
+  string call_id = 1;
+  string participant_id = 2;
+}
+
+message EndCallResponse {
+  bool success = 1;
+}
+
+message GetTurnCredentialsRequest {
+  string user_id = 1;
+}
+
+message GetTurnCredentialsResponse {
+  string username = 1;
+  string password = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+service CallService {
+  rpc InitiateCall(InitiateCallRequest) returns (InitiateCallResponse);
+  rpc JoinCall(JoinCallRequest) returns (JoinCallResponse);
+  rpc EndCall(EndCallRequest) returns (EndCallResponse);
+  rpc GetTurnCredentials(GetTurnCredentialsRequest) returns (GetTurnCredentialsResponse);
+}

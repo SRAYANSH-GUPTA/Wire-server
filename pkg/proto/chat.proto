@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package chat;
+
+option go_package = "wire-server/pkg/proto/chatpb";
+
+import "google/protobuf/timestamp.proto";
+
+message SendMessageRequest {
+  string sender_id = 1;
+  repeated string recipient_ids = 2;
+  string group_id = 3;
+  string body = 4;
+  string trace_id = 5;
+}
+
+message SendMessageResponse {
+  string message_id = 1;
+  google.protobuf.Timestamp server_ts = 2;
+}
+
+message Message {
+  string message_id = 1;
+  string sender_id = 2;
+  repeated string recipient_ids = 3;
+  string body = 4;
+  string status = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message GetHistoryRequest {
+  string conversation_id = 1;
+  string cursor = 2;
+  int32 limit = 3;
+}
+
+message GetHistoryResponse {
+  repeated Message messages = 1;
+  string next_cursor = 2;
+}
+
+message MarkStatusRequest {
+  string message_id = 1;
+  string user_id = 2;
+  string status = 3;
+}
+
+message MarkStatusResponse {
+  bool success = 1;
+}
+
+service ChatService {
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
+  rpc GetHistory(GetHistoryRequest) returns (GetHistoryResponse);
+  rpc MarkDelivered(MarkStatusRequest) returns (MarkStatusResponse);
+  rpc MarkRead(MarkStatusRequest) returns (MarkStatusResponse);
+}

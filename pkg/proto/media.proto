@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package media;
+
+option go_package = "wire-server/pkg/proto/mediapb";
+
+import "google/protobuf/timestamp.proto";
+
+message RequestUploadURLRequest {
+  string user_id = 1;
+  string content_type = 2;
+  int64 size = 3;
+}
+
+message RequestUploadURLResponse {
+  string url = 1;
+  map<string, string> headers = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+message GetMediaItemRequest {
+  string media_id = 1;
+}
+
+message MediaItem {
+  string media_id = 1;
+  string bucket = 2;
+  string object_key = 3;
+  string status = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message GetMediaItemResponse {
+  MediaItem item = 1;
+}
+
+service MediaService {
+  rpc RequestUploadURL(RequestUploadURLRequest) returns (RequestUploadURLResponse);
+  rpc GetMediaItem(GetMediaItemRequest) returns (GetMediaItemResponse);
+}

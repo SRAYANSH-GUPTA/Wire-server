@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package wsframes;
+
+option go_package = "wire-server/pkg/proto/wsframespb";
+
+import "google/protobuf/timestamp.proto";
+
+message ChatMessage {
+  string message_id = 1;
+  string sender_id = 2;
+  repeated string recipient_ids = 3;
+  string conversation_id = 4;
+  string body = 5;
+  string trace_id = 6;
+  google.protobuf.Timestamp created_at = 7;
+  bool group_message = 8;
+}
+
+message Ack {
+  string message_id = 1;
+  string status = 2;
+  string trace_id = 3;
+}
+
+message PresenceUpdate {
+  string user_id = 1;
+  string status = 2;
+  google.protobuf.Timestamp last_seen = 3;
+}
+
+enum CallSignalType {
+  CALL_SIGNAL_UNSPECIFIED = 0;
+  CALL_SIGNAL_OFFER = 1;
+  CALL_SIGNAL_ANSWER = 2;
+  CALL_SIGNAL_CANDIDATE = 3;
+}
+
+message CallSignal {
+  string call_id = 1;
+  CallSignalType type = 2;
+  string from_user_id = 3;
+  string to_user_id = 4;
+  bytes payload = 5;
+  string trace_id = 6;
+}
+
+message Typing {
+  string user_id = 1;
+  string conversation_id = 2;
+  bool typing = 3;
+  string trace_id = 4;
+}

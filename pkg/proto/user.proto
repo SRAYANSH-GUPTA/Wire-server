@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package user;
+
+option go_package = "wire-server/pkg/proto/userpb";
+
+import "google/protobuf/timestamp.proto";
+
+message User {
+  string user_id = 1;
+  string email = 2;
+  string display_name = 3;
+  string avatar_url = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message GetUserRequest {
+  string user_id = 1;
+}
+
+message GetUserResponse {
+  User user = 1;
+}
+
+message GetContactsRequest {
+  string user_id = 1;
+  int32 limit = 2;
+  string cursor = 3;
+}
+
+message Contact {
+  string user_id = 1;
+  string phone_hash = 2;
+}
+
+message GetContactsResponse {
+  repeated Contact contacts = 1;
+  string next_cursor = 2;
+}
+
+message BlockUserRequest {
+  string user_id = 1;
+  string block_user_id = 2;
+}
+
+message BlockUserResponse {
+  bool success = 1;
+}
+
+service UserService {
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+  rpc GetContacts(GetContactsRequest) returns (GetContactsResponse);
+  rpc BlockUser(BlockUserRequest) returns (BlockUserResponse);
+}

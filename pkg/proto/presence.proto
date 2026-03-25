@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package presence;
+
+option go_package = "wire-server/pkg/proto/presencepb";
+
+import "google/protobuf/timestamp.proto";
+
+message PresenceRecord {
+  string user_id = 1;
+  string status = 2;
+  google.protobuf.Timestamp last_seen = 3;
+}
+
+message GetPresenceRequest {
+  string user_id = 1;
+}
+
+message GetPresenceResponse {
+  PresenceRecord presence = 1;
+}
+
+message GetBulkPresenceRequest {
+  repeated string user_ids = 1;
+}
+
+message GetBulkPresenceResponse {
+  repeated PresenceRecord records = 1;
+}
+
+service PresenceService {
+  rpc GetPresence(GetPresenceRequest) returns (GetPresenceResponse);
+  rpc GetBulkPresence(GetBulkPresenceRequest) returns (GetBulkPresenceResponse);
+}
