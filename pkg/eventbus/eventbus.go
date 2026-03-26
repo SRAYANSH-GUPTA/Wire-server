@@ -18,14 +18,15 @@ type EventBus interface {
 }
 
 type Config struct {
-	Driver string
-	Logger *zap.Logger
-	Client *redis.Client
+	Driver       string
+	Logger       *zap.Logger
+	Client       redis.Cmdable
+	KafkaBrokers []string
 }
 
 func NewEventBus(cfg Config) EventBus {
 	if strings.EqualFold(cfg.Driver, "kafka") {
-		return &KafkaImpl{}
+		return NewKafkaEventBus(cfg.KafkaBrokers, cfg.Logger)
 	}
 	if cfg.Client == nil {
 		panic("eventbus redis client is required")
@@ -37,7 +38,7 @@ func NewEventBus(cfg Config) EventBus {
 }
 
 type RedisStreams struct {
-	client *redis.Client
+	client redis.Cmdable
 	logger *zap.Logger
 }
 
@@ -108,18 +109,4 @@ func (r *RedisStreams) Ack(ctx context.Context, stream, group, id string) error 
 		r.logger.Debug("eventbus ack", zap.String("stream", stream), zap.Int64("latency_ms", time.Since(start).Milliseconds()))
 	}
 	return nil
-}
-
-type KafkaImpl struct{}
-
-func (k *KafkaImpl) Publish(ctx context.Context, stream string, msg proto.Message) error {
-	panic("set EVENT_BUS_DRIVER=kafka and add Kafka brokers")
-}
-
-func (k *KafkaImpl) Subscribe(ctx context.Context, stream, group string, fn func(ctx context.Context, payload []byte)) error {
-	panic("set EVENT_BUS_DRIVER=kafka and add Kafka brokers")
-}
-
-func (k *KafkaImpl) Ack(ctx context.Context, stream, group, id string) error {
-	panic("set EVENT_BUS_DRIVER=kafka and add Kafka brokers")
 }

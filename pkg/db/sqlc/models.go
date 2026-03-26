@@ -9,6 +9,11 @@ type Message struct {
 	Body           string
 	MediaURL       *string
 	CreatedAt      time.Time
+	RecipientID    *string
+	GroupID        *string
+	BodyEncrypted  string
+	BodyType       string
+	ServerTs       time.Time
 }
 
 type MessageReceipt struct {
@@ -39,5 +44,21 @@ type PresenceRecord struct {
 	UserID    string
 	Status    string
 	LastSeen  *time.Time
+	UpdatedAt time.Time
+}
+
+type User struct {
+	ID        string
+	Email     string
+	Phone     *string
+	Role      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type MessageStatus struct {
+	MessageID string
+	UserID    string
+	Status    string
 	UpdatedAt time.Time
 }

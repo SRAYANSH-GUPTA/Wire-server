@@ -2,9 +2,11 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -12,13 +14,13 @@ import (
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 
 	"wire-server/pkg/eventbus"
 	"wire-server/pkg/middleware"
-	presencepb "wire-server/pkg/proto/presencepb"
+	"wire-server/pkg/proto/presencepb"
+	"wire-server/pkg/redis"
 )
 
 type Hub struct {
@@ -33,6 +35,7 @@ type Hub struct {
 	groups       chan groupBroadcast
 	mu           sync.Mutex
 	activeMetric prometheus.Gauge
+	lookup       func(context.Context, string) (bool, error)
 }
 
 type groupBroadcast struct {
@@ -48,7 +51,7 @@ type Connection struct {
 	lastPong time.Time
 }
 
-func NewHub(logger *zap.Logger, redisClient *redis.Client, eventBus eventbus.EventBus) (*Hub, error) {
+func NewHub(logger *zap.Logger, redisClient *redis.Client, eventBus eventbus.EventBus, lookup func(context.Context, string) (bool, error)) (*Hub, error) {
 	fd, err := unix.EpollCreate1(0)
 	if err != nil {
 		return nil, fmt.Errorf("epoll create: %w", err)
@@ -64,7 +67,10 @@ func NewHub(logger *zap.Logger, redisClient *redis.Client, eventBus eventbus.Eve
 		broadcast:    make(chan []byte, 128),
 		groups:       make(chan groupBroadcast, 32),
 		activeMetric: prometheus.NewGauge(prometheus.GaugeOpts{Name: "active_ws_connections", Help: "Open WS connections"}),
-	}, nil
+		lookup:       lookup,
+	}
+	prometheus.MustRegister(hub.activeMetric)
+	return hub, nil
 }
 
 func (h *Hub) Run(ctx context.Context) error {
@@ -101,8 +107,6 @@ func (h *Hub) Run(ctx context.Context) error {
 			}
 		}
 	}
-	prometheus.MustRegister(hub.activeMetric)
-	return hub, nil
 }
 
 func (h *Hub) Register(c *Connection) {
@@ -140,7 +144,7 @@ func (h *Hub) remove(c *Connection) {
 	_ = unix.EpollCtl(h.fd, unix.EPOLL_CTL_DEL, c.fd, nil)
 	if c != nil {
 		_ = c.Close()
-		_ = h.eventBus.Publish(context.Background(), "events.presence", &presencepb.PresenceRecord{
+		_ = h.eventBus.Publish(context.Background(), "user.offline", &presencepb.PresenceRecord{
 			UserId: c.user.UserID,
 			Status: "offline",
 		})
@@ -190,10 +194,32 @@ func (h *Hub) handleRead(conn *Connection) {
 	if len(data) == 0 {
 		return
 	}
+	raw := strings.TrimSpace(string(data))
+	if strings.HasPrefix(raw, "lookup:") {
+		if h.lookup != nil {
+			phone := strings.TrimSpace(strings.TrimPrefix(raw, "lookup:"))
+			go h.respondLookup(conn, phone)
+		}
+		return
+	}
 	if !h.allowWSMessage(conn.user.UserID) {
 		return
 	}
 	h.Broadcast(data)
+}
+
+func (h *Hub) respondLookup(conn *Connection, phone string) {
+	exists, err := h.lookup(context.Background(), phone)
+	resp := map[string]any{
+		"type":   "lookup",
+		"phone":  phone,
+		"exists": exists,
+	}
+	if err != nil {
+		resp["error"] = err.Error()
+	}
+	payload, _ := json.Marshal(resp)
+	conn.Send(payload)
 }
 
 func (h *Hub) allowWSMessage(userID string) bool {
@@ -209,13 +235,17 @@ func (h *Hub) Shutdown() error {
 	return unix.Close(h.fd)
 }
 
-func NewConnection(conn net.Conn, claims middleware.Claims, redisClient *redis.Client, bus eventbus.EventBus, logger *zap.Logger) (*Connection, error) {
+func NewConnection(conn net.Conn, claims middleware.Claims) (*Connection, error) {
 	raw, ok := conn.(syscall.Conn)
 	if !ok {
 		return nil, fmt.Errorf("unsupported conn type: %T", conn)
 	}
 	var fd int
-	if err := raw.SyscallConn().Control(func(s uintptr) {
+	rawConn, err := raw.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	if err := rawConn.Control(func(s uintptr) {
 		fd = int(s)
 		_ = unix.SetNonblock(fd, true)
 	}); err != nil {
@@ -231,11 +261,11 @@ func NewConnection(conn net.Conn, claims middleware.Claims, redisClient *redis.C
 
 func (c *Connection) readMessage() ([]byte, error) {
 	reader := wsutil.NewReader(c.Conn, ws.StateServerSide)
-	op, err := reader.NextFrame()
+	hdr, err := reader.NextFrame()
 	if err != nil {
 		return nil, err
 	}
-	switch reader.Header.OpCode {
+	switch hdr.OpCode {
 	case ws.OpPong:
 		c.lastPong = time.Now()
 		return nil, nil
@@ -251,9 +281,9 @@ func (c *Connection) readMessage() ([]byte, error) {
 func (c *Connection) Send(payload []byte) {
 	c.bytesMu.Lock()
 	defer c.bytesMu.Unlock()
+	if len(payload) == 0 {
+		_ = wsutil.WriteServerMessage(c.Conn, ws.OpPong, nil)
+		return
+	}
 	_ = wsutil.WriteServerBinary(c.Conn, payload)
-}
-
-type PresenceOffline struct {
-	UserId string
 }

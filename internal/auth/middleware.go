@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"wire-server/pkg/logger"
 )
 
 type Middleware struct {
@@ -33,7 +31,7 @@ func (m *Middleware) Wrap(next http.Handler) http.Handler {
 			return
 		}
 		ctx := WithContext(r.Context(), claims)
-		next.ServeHTTP(w, r.WithContext(logger.WithContext(ctx, claims.UserID, claims.UserID)))
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

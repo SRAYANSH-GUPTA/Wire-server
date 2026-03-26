@@ -25,6 +25,7 @@ type GatewayConfig struct {
 	PresenceServiceAddr string
 	UserServiceAddr     string
 	SupabaseURL         string
+	SupabaseDBURL       string
 	EventBusDriver      string
 }
 
@@ -109,6 +110,7 @@ func LoadGatewayConfig() GatewayConfig {
 		PresenceServiceAddr: v.GetString("PRESENCE_SERVICE_ADDR"),
 		UserServiceAddr:     v.GetString("USER_SERVICE_ADDR"),
 		SupabaseURL:         v.GetString("SUPABASE_URL"),
+		SupabaseDBURL:       v.GetString("SUPABASE_DB_URL"),
 		EventBusDriver:      v.GetString("EVENT_BUS_DRIVER"),
 	}
 	assertNonEmpty("GATEWAY_PORT", cfg.Port)
@@ -120,6 +122,7 @@ func LoadGatewayConfig() GatewayConfig {
 	assertNonEmpty("PRESENCE_SERVICE_ADDR", cfg.PresenceServiceAddr)
 	assertNonEmpty("USER_SERVICE_ADDR", cfg.UserServiceAddr)
 	assertNonEmpty("SUPABASE_URL", cfg.SupabaseURL)
+	assertNonEmpty("SUPABASE_DB_URL", cfg.SupabaseDBURL)
 	return cfg
 }
 

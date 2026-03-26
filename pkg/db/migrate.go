@@ -14,10 +14,10 @@ func RunMigrations(databaseURL, migrationsPath string) error {
 		return fmt.Errorf("db.RunMigrations create: %w", err)
 	}
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		_ = m.Close()
+		_, _ = m.Close()
 		return fmt.Errorf("db.RunMigrations up: %w", err)
 	}
-	if err := m.Close(); err != nil {
+	if _, err := m.Close(); err != nil {
 		return fmt.Errorf("db.RunMigrations close: %w", err)
 	}
 	return nil

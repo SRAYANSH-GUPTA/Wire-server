@@ -5,13 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// write-op
 func NewPrimaryPool(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
@@ -31,7 +27,6 @@ func NewPrimaryPool(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-// read-op
 func NewReplicaPool(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
@@ -49,23 +44,4 @@ func NewReplicaPool(ctx context.Context, url string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("db.NewReplicaPool ping: %w", err)
 	}
 	return pool, nil
-}
-
-// write-op
-func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) error {
-	source := fmt.Sprintf("file://%s", migrationsDir)
-	m, err := migrate.New(source, pool.Config().ConnString())
-	if err != nil {
-		return fmt.Errorf("db.RunMigrations create: %w", err)
-	}
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		if closeErr := m.Close(); closeErr != nil {
-			return fmt.Errorf("db.RunMigrations up: %w, close: %v", err, closeErr)
-		}
-		return fmt.Errorf("db.RunMigrations up: %w", err)
-	}
-	if err := m.Close(); err != nil {
-		return fmt.Errorf("db.RunMigrations close: %w", err)
-	}
-	return nil
 }

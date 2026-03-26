@@ -11,7 +11,8 @@ import (
 
 	"wire-server/internal/presence"
 	"wire-server/pkg/db/sqlc"
-	eb "wire-server/pkg/eventbus"
+	"wire-server/pkg/eventbus"
+	"wire-server/pkg/proto/chatpb"
 	"wire-server/pkg/ws"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -20,7 +21,7 @@ import (
 type Service struct {
 	repo     *sqlc.Queries
 	hub      *ws.Hub
-	bus      eb.Bus
+	bus      eventbus.EventBus
 	presence *presence.Tracker
 	redis    *goredis.Client
 }
@@ -40,7 +41,7 @@ type ReadRequest struct {
 	TraceID   string
 }
 
-func New(repo *sqlc.Queries, hub *ws.Hub, bus eb.Bus, tracker *presence.Tracker, redisClient *goredis.Client) *Service {
+func New(repo *sqlc.Queries, hub *ws.Hub, bus eventbus.EventBus, tracker *presence.Tracker, redisClient *goredis.Client) *Service {
 	return &Service{repo: repo, hub: hub, bus: bus, presence: tracker, redis: redisClient}
 }
 
@@ -113,20 +114,14 @@ func (s *Service) SendMessage(ctx context.Context, req SendRequest) (sqlc.Messag
 		}
 	}
 	if len(targets) > 0 {
-		evt := eb.Event{
-			Type:   "msg.sent",
-			Stream: "events.chat",
-			ID:     msg.ID,
-			Payload: []byte(strings.Join([]string{
-				msg.ID,
-				msg.ConversationID,
-				req.SenderID,
-			}, "|")),
-			Metadata: map[string]string{
-				"trace_id": req.TraceID,
-			},
+		evt := &chatpb.Message{
+			MessageId:    msg.ID,
+			SenderId:     req.SenderID,
+			RecipientIds: targets,
+			Body:         msg.Body,
+			Status:       "sent",
 		}
-		_ = s.bus.Publish(ctx, evt.Stream, evt)
+		_ = s.bus.Publish(ctx, "events.chat", evt)
 		for _, target := range targets {
 			s.deliver(ctx, target, msg, req.TraceID)
 		}
@@ -143,12 +138,12 @@ func (s *Service) MarkRead(ctx context.Context, req ReadRequest) error {
 	if err != nil {
 		return fmt.Errorf("chat.MarkRead: %w", err)
 	}
-	_ = s.bus.Publish(ctx, "events.chat", eb.Event{
-		Type:     "msg.read",
-		Stream:   "events.chat",
-		ID:       req.MessageID,
-		Metadata: map[string]string{"user_id": req.UserID, "trace_id": req.TraceID},
-	})
+	evt := &chatpb.MarkStatusRequest{
+		MessageId: req.MessageID,
+		UserId:    req.UserID,
+		Status:    "read",
+	}
+	_ = s.bus.Publish(ctx, "events.chat", evt)
 	return nil
 }
 

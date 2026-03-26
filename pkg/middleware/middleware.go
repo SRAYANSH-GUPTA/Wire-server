@@ -2,22 +2,24 @@ package middleware
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"math/big"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/gobreaker/gobreaker"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
-	"go.uber.org/zap"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -29,6 +31,16 @@ type Claims struct {
 	Email  string `json:"email"`
 	jwt.RegisteredClaims
 }
+
+type jwksCacheEntry struct {
+	keys      map[string]any
+	expiresAt time.Time
+}
+
+var (
+	jwksMu    sync.RWMutex
+	jwksCache = map[string]jwksCacheEntry{}
+)
 
 var (
 	httpRequests = promauto.NewCounterVec(prometheus.CounterOpts{
@@ -43,7 +55,7 @@ var (
 	validate = validator.New()
 )
 
-func AuthMiddleware(jwtSecret string) func(http.Handler) http.Handler {
+func AuthMiddleware(jwtSecret, supabaseURL string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := BearerToken(r.Header.Get("Authorization"))
@@ -51,7 +63,7 @@ func AuthMiddleware(jwtSecret string) func(http.Handler) http.Handler {
 				http.Error(w, "missing bearer token", http.StatusUnauthorized)
 				return
 			}
-			claims, err := parseToken(token, jwtSecret)
+			claims, err := parseToken(token, jwtSecret, supabaseURL)
 			if err != nil {
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return
@@ -67,13 +79,29 @@ func ClaimsFromContext(ctx context.Context) (Claims, bool) {
 	return claims, ok
 }
 
-func parseToken(tokenString, secret string) (Claims, error) {
+func parseToken(tokenString, secret, supabaseURL string) (Claims, error) {
 	claims := Claims{}
 	token, err := jwt.ParseWithClaims(tokenString, &claims, func(token *jwt.Token) (any, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+		switch token.Method.(type) {
+		case *jwt.SigningMethodHMAC:
+			return []byte(secret), nil
+		case *jwt.SigningMethodECDSA:
+			kid, _ := token.Header["kid"].(string)
+			if strings.TrimSpace(kid) == "" {
+				return nil, fmt.Errorf("missing kid")
+			}
+			keys, err := loadJWKSKeys(supabaseURL)
+			if err != nil {
+				return nil, err
+			}
+			key, ok := keys[kid]
+			if !ok {
+				return nil, fmt.Errorf("kid not found")
+			}
+			return key, nil
+		default:
 			return nil, fmt.Errorf("invalid signing method")
 		}
-		return []byte(secret), nil
 	})
 	if err != nil {
 		return Claims{}, err
@@ -85,6 +113,78 @@ func parseToken(tokenString, secret string) (Claims, error) {
 		claims.UserID = claims.Subject
 	}
 	return claims, nil
+}
+
+func loadJWKSKeys(supabaseURL string) (map[string]any, error) {
+	base := strings.TrimRight(strings.TrimSpace(supabaseURL), "/")
+	if base == "" {
+		return nil, fmt.Errorf("supabase url missing")
+	}
+
+	jwksMu.RLock()
+	if entry, ok := jwksCache[base]; ok && time.Now().Before(entry.expiresAt) {
+		jwksMu.RUnlock()
+		return entry.keys, nil
+	}
+	jwksMu.RUnlock()
+
+	req, err := http.NewRequest(http.MethodGet, base+"/auth/v1/.well-known/jwks.json", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("jwks fetch failed: %s", resp.Status)
+	}
+
+	var payload struct {
+		Keys []struct {
+			Kid string `json:"kid"`
+			Kty string `json:"kty"`
+			Crv string `json:"crv"`
+			X   string `json:"x"`
+			Y   string `json:"y"`
+		} `json:"keys"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+
+	keys := make(map[string]any, len(payload.Keys))
+	for _, k := range payload.Keys {
+		if k.Kid == "" || strings.ToUpper(k.Kty) != "EC" || k.Crv != "P-256" {
+			continue
+		}
+		xBytes, err := base64.RawURLEncoding.DecodeString(k.X)
+		if err != nil {
+			continue
+		}
+		yBytes, err := base64.RawURLEncoding.DecodeString(k.Y)
+		if err != nil {
+			continue
+		}
+		pub := &ecdsa.PublicKey{
+			Curve: elliptic.P256(),
+			X:     new(big.Int).SetBytes(xBytes),
+			Y:     new(big.Int).SetBytes(yBytes),
+		}
+		keys[k.Kid] = pub
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("no usable jwks keys")
+	}
+
+	jwksMu.Lock()
+	jwksCache[base] = jwksCacheEntry{
+		keys:      keys,
+		expiresAt: time.Now().Add(10 * time.Minute),
+	}
+	jwksMu.Unlock()
+	return keys, nil
 }
 
 func BearerToken(header string) string {
@@ -133,7 +233,7 @@ func (r *statusRecorder) WriteHeader(status int) {
 	r.ResponseWriter.WriteHeader(status)
 }
 
-func RateLimitMiddleware(client *redis.Client, limit int64, window time.Duration) func(http.Handler) http.Handler {
+func RateLimitMiddleware(client redis.Cmdable, limit int64, window time.Duration) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := clientIP(r)

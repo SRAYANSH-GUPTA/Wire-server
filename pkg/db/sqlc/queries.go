@@ -6,12 +6,13 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type DBTX interface {
-	Exec(context.Context, string, ...any) (pgx.CommandTag, error)
-	Query(context.Context, string, ...any) (pgx.Rows, error)
-	QueryRow(context.Context, string, ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 type Queries struct {
@@ -169,4 +170,229 @@ type InsertMediaObjectParams struct {
 	ContentType string
 	SizeBytes   int64
 	Status      string
+}
+
+func (q *Queries) FindUsersByPhones(ctx context.Context, phones []string) ([]User, error) {
+	const query = `
+SELECT id, email, phone, role, created_at, updated_at
+FROM users
+WHERE phone = ANY($1)`
+	rows, err := q.db.Query(ctx, query, phones)
+	if err != nil {
+		return nil, fmt.Errorf("sqlc.FindUsersByPhones: %w", err)
+	}
+	defer rows.Close()
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Email, &u.Phone, &u.Role, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("sqlc.FindUsersByPhones scan: %w", err)
+		}
+		users = append(users, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlc.FindUsersByPhones rows: %w", err)
+	}
+	return users, nil
+}
+
+type InsertMessageParams struct {
+	SenderID       string
+	RecipientID    *string
+	GroupID        *string
+	BodyEncrypted  string
+	BodyType       string
+	Body           string
+	ConversationID string
+}
+
+func (q *Queries) InsertMessage(ctx context.Context, params InsertMessageParams) (Message, error) {
+	const query = `
+INSERT INTO messages (
+    sender_id,
+    recipient_id,
+    group_id,
+    body_encrypted,
+    body_type,
+    server_ts,
+    body,
+    conversation_id,
+    created_at
+)
+VALUES (
+    $1, $2, $3, $4, $5, NOW(), $6, $7, NOW()
+)
+RETURNING
+    id,
+    conversation_id,
+    sender_id,
+    body,
+    media_url,
+    created_at,
+    recipient_id,
+    group_id,
+    body_encrypted,
+    body_type,
+    server_ts`
+	var msg Message
+	if err := q.db.QueryRow(
+		ctx,
+		query,
+		params.SenderID,
+		params.RecipientID,
+		params.GroupID,
+		params.BodyEncrypted,
+		params.BodyType,
+		params.Body,
+		params.ConversationID,
+	).Scan(
+		&msg.ID,
+		&msg.ConversationID,
+		&msg.SenderID,
+		&msg.Body,
+		&msg.MediaURL,
+		&msg.CreatedAt,
+		&msg.RecipientID,
+		&msg.GroupID,
+		&msg.BodyEncrypted,
+		&msg.BodyType,
+		&msg.ServerTs,
+	); err != nil {
+		return Message{}, fmt.Errorf("sqlc.InsertMessage: %w", err)
+	}
+	return msg, nil
+}
+
+func (q *Queries) GetMessageByID(ctx context.Context, id string) (Message, error) {
+	const query = `
+SELECT
+    id,
+    conversation_id,
+    sender_id,
+    body,
+    media_url,
+    created_at,
+    recipient_id,
+    group_id,
+    body_encrypted,
+    body_type,
+    server_ts
+FROM messages
+WHERE id = $1`
+	var msg Message
+	if err := q.db.QueryRow(ctx, query, id).Scan(
+		&msg.ID,
+		&msg.ConversationID,
+		&msg.SenderID,
+		&msg.Body,
+		&msg.MediaURL,
+		&msg.CreatedAt,
+		&msg.RecipientID,
+		&msg.GroupID,
+		&msg.BodyEncrypted,
+		&msg.BodyType,
+		&msg.ServerTs,
+	); err != nil {
+		return Message{}, fmt.Errorf("sqlc.GetMessageByID: %w", err)
+	}
+	return msg, nil
+}
+
+type GetMessageHistoryParams struct {
+	ConversationID string
+	Cursor         string
+	Limit          int32
+}
+
+func (q *Queries) GetMessageHistory(ctx context.Context, params GetMessageHistoryParams) ([]Message, error) {
+	const query = `
+SELECT
+    id,
+    conversation_id,
+    sender_id,
+    body,
+    media_url,
+    created_at,
+    recipient_id,
+    group_id,
+    body_encrypted,
+    body_type,
+    server_ts
+FROM messages
+WHERE conversation_id = $1
+  AND ($2::text = '' OR created_at < COALESCE((SELECT created_at FROM messages WHERE id = $2), NOW()))
+ORDER BY created_at DESC, id DESC
+LIMIT $3`
+	rows, err := q.db.Query(ctx, query, params.ConversationID, params.Cursor, params.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("sqlc.GetMessageHistory: %w", err)
+	}
+	defer rows.Close()
+	out := make([]Message, 0)
+	for rows.Next() {
+		var msg Message
+		if err := rows.Scan(
+			&msg.ID,
+			&msg.ConversationID,
+			&msg.SenderID,
+			&msg.Body,
+			&msg.MediaURL,
+			&msg.CreatedAt,
+			&msg.RecipientID,
+			&msg.GroupID,
+			&msg.BodyEncrypted,
+			&msg.BodyType,
+			&msg.ServerTs,
+		); err != nil {
+			return nil, fmt.Errorf("sqlc.GetMessageHistory scan: %w", err)
+		}
+		out = append(out, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlc.GetMessageHistory rows: %w", err)
+	}
+	return out, nil
+}
+
+type UpsertMessageStatusParams struct {
+	MessageID string
+	UserID    string
+	Status    string
+}
+
+func (q *Queries) UpsertMessageStatus(ctx context.Context, params UpsertMessageStatusParams) error {
+	const query = `
+INSERT INTO message_status (message_id, user_id, status, updated_at)
+VALUES ($1, $2, $3, NOW())
+ON CONFLICT (message_id, user_id)
+DO UPDATE SET status = EXCLUDED.status, updated_at = NOW()`
+	if _, err := q.db.Exec(ctx, query, params.MessageID, params.UserID, params.Status); err != nil {
+		return fmt.Errorf("sqlc.UpsertMessageStatus: %w", err)
+	}
+	return nil
+}
+
+func (q *Queries) GetGroupMembers(ctx context.Context, groupID string) ([]string, error) {
+	const query = `
+SELECT user_id
+FROM group_members
+WHERE group_id = $1
+ORDER BY created_at ASC`
+	rows, err := q.db.Query(ctx, query, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("sqlc.GetGroupMembers: %w", err)
+	}
+	defer rows.Close()
+	out := make([]string, 0)
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			return nil, fmt.Errorf("sqlc.GetGroupMembers scan: %w", err)
+		}
+		out = append(out, userID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlc.GetGroupMembers rows: %w", err)
+	}
+	return out, nil
 }

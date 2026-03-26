@@ -1,0 +1,48 @@
+{
+  "info": {
+    "name": "Wire Server APIs",
+    "description": "Gateway + chat service APIs including WhatsApp-style group management.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {"name":"Gateway Health","request":{"method":"GET","header":[],"url":"{{base_url}}/health"}},
+    {"name":"Gateway Refresh Token","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\n  \"refresh_token\": \"{{refresh_token}}\"\n}"},"url":"{{base_url}}/auth/refresh"}},
+
+    {"name":"Create Group","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"},{"key":"Authorization","value":"Bearer {{jwt}}"}],"body":{"mode":"raw","raw":"{\n  \"name\": \"Weekend Trip\",\n  \"description\": \"Goa planning group\",\n  \"avatar_url\": \"\",\n  \"member_ids\": [\"{{recipient_id}}\", \"user_3\"]\n}"},"url":"{{base_url}}/api/v1/groups"}},
+    {"name":"List My Groups","request":{"method":"GET","header":[{"key":"Authorization","value":"Bearer {{jwt}}"}],"url":"{{base_url}}/api/v1/groups"}},
+    {"name":"Get Group Details","request":{"method":"GET","header":[{"key":"Authorization","value":"Bearer {{jwt}}"}],"url":"{{base_url}}/api/v1/groups/{{group_id}}"}},
+    {"name":"Update Group Info","request":{"method":"PATCH","header":[{"key":"Content-Type","value":"application/json"},{"key":"Authorization","value":"Bearer {{jwt}}"}],"body":{"mode":"raw","raw":"{\n  \"name\": \"Weekend Trip 2.0\",\n  \"description\": \"Updated agenda\",\n  \"avatar_url\": \"\"\n}"},"url":"{{base_url}}/api/v1/groups/{{group_id}}"}},
+    {"name":"Add Group Members","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"},{"key":"Authorization","value":"Bearer {{jwt}}"}],"body":{"mode":"raw","raw":"{\n  \"member_ids\": [\"user_4\", \"user_5\"]\n}"},"url":"{{base_url}}/api/v1/groups/{{group_id}}/members"}},
+    {"name":"Remove Group Member","request":{"method":"DELETE","header":[{"key":"Authorization","value":"Bearer {{jwt}}"}],"url":"{{base_url}}/api/v1/groups/{{group_id}}/members/{{target_user_id}}"}},
+    {"name":"Promote Group Admin","request":{"method":"POST","header":[{"key":"Authorization","value":"Bearer {{jwt}}"}],"url":"{{base_url}}/api/v1/groups/{{group_id}}/admins/{{target_user_id}}"}},
+    {"name":"Demote Group Admin","request":{"method":"DELETE","header":[{"key":"Authorization","value":"Bearer {{jwt}}"}],"url":"{{base_url}}/api/v1/groups/{{group_id}}/admins/{{target_user_id}}"}},
+    {"name":"Get Group Invite","request":{"method":"GET","header":[{"key":"Authorization","value":"Bearer {{jwt}}"}],"url":"{{base_url}}/api/v1/groups/{{group_id}}/invite"}},
+    {"name":"Reset Group Invite","request":{"method":"POST","header":[{"key":"Authorization","value":"Bearer {{jwt}}"}],"url":"{{base_url}}/api/v1/groups/{{group_id}}/invite/reset"}},
+    {"name":"Join Group By Invite","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"},{"key":"Authorization","value":"Bearer {{jwt}}"}],"body":{"mode":"raw","raw":"{\n  \"invite_code\": \"{{invite_code}}\"\n}"},"url":"{{base_url}}/api/v1/groups/join-by-invite"}},
+    {"name":"Leave Group","request":{"method":"POST","header":[{"key":"Authorization","value":"Bearer {{jwt}}"}],"url":"{{base_url}}/api/v1/groups/{{group_id}}/leave"}},
+
+    {"name":"Create Message","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"},{"key":"Authorization","value":"Bearer {{jwt}}"}],"body":{"mode":"raw","raw":"{\n  \"sender_id\": \"{{sender_id}}\",\n  \"recipient_ids\": [\"{{recipient_id}}\"],\n  \"group_id\": \"\",\n  \"body\": \"hello from postman\",\n  \"trace_id\": \"postman-trace-1\"\n}"},"url":"{{base_url}}/api/v1/messages"}},
+    {"name":"Create Group Message","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"},{"key":"Authorization","value":"Bearer {{jwt}}"}],"body":{"mode":"raw","raw":"{\n  \"sender_id\": \"{{sender_id}}\",\n  \"recipient_ids\": [],\n  \"group_id\": \"{{group_id}}\",\n  \"body\": \"hello group\",\n  \"trace_id\": \"postman-group-trace-1\"\n}"},"url":"{{base_url}}/api/v1/messages"}},
+    {"name":"Get Message History","request":{"method":"GET","header":[{"key":"Authorization","value":"Bearer {{jwt}}"}],"url":"{{base_url}}/api/v1/messages/{{conversation_id}}"}},
+    {"name":"Lookup Users By Phones","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"},{"key":"Authorization","value":"Bearer {{jwt}}"}],"body":{"mode":"raw","raw":"{\n  \"phones\": [\"{{phone_1}}\", \"{{phone_2}}\"]\n}"},"url":"{{base_url}}/api/v1/users/lookup"}},
+    {"name":"Request Media Upload","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"},{"key":"Authorization","value":"Bearer {{jwt}}"}],"body":{"mode":"raw","raw":"{\n  \"owner_id\": \"{{sender_id}}\",\n  \"filename\": \"demo.jpg\",\n  \"content_type\": \"image/jpeg\",\n  \"size_bytes\": 12345\n}"},"url":"{{base_url}}/api/v1/media/upload"}},
+    {"name":"Start Call","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"},{"key":"Authorization","value":"Bearer {{jwt}}"}],"body":{"mode":"raw","raw":"{\n  \"caller_id\": \"{{sender_id}}\",\n  \"callee_id\": \"{{recipient_id}}\",\n  \"conversation_id\": \"{{conversation_id}}\"\n}"},"url":"{{base_url}}/api/v1/calls/start"}},
+    {"name":"Get User","request":{"method":"GET","header":[{"key":"Authorization","value":"Bearer {{jwt}}"}],"url":"{{base_url}}/api/v1/users/{{sender_id}}"}},
+    {"name":"Get Presence","request":{"method":"GET","header":[{"key":"Authorization","value":"Bearer {{jwt}}"}],"url":"{{base_url}}/api/v1/presence/{{sender_id}}"}},
+    {"name":"Chat Service Health","request":{"method":"GET","header":[],"url":"{{chat_health_url}}/health"}}
+  ],
+  "variable": [
+    {"key":"base_url","value":"http://localhost:8080"},
+    {"key":"chat_health_url","value":"http://localhost:8110"},
+    {"key":"jwt","value":""},
+    {"key":"refresh_token","value":""},
+    {"key":"sender_id","value":"smoke-sender"},
+    {"key":"recipient_id","value":"smoke-recipient"},
+    {"key":"target_user_id","value":"smoke-recipient"},
+    {"key":"group_id","value":"grp_replace_me"},
+    {"key":"invite_code","value":""},
+    {"key":"conversation_id","value":"dm:smoke-recipient:smoke-sender"},
+    {"key":"phone_1","value":"9000000001"},
+    {"key":"phone_2","value":"9000000002"}
+  ]
+}

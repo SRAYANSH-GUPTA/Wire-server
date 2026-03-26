@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"syscall"
@@ -15,8 +16,10 @@ import (
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"wire-server/pkg/config"
+	"wire-server/pkg/db"
 	"wire-server/pkg/eventbus"
 	loggerpkg "wire-server/pkg/logger"
 	"wire-server/pkg/redis"
@@ -32,14 +35,19 @@ func main() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	reload := viper.New()
 
 	redisAddrs := parseAddrs(cfg.RedisClusterAddrs)
 	redisClient, err := redis.NewClusterClient(ctx, redisAddrs, log)
 	if err != nil {
 		log.Fatal("redis connect failed", zap.Error(err))
 	}
-	eventBus := eventbus.NewEventBus(eventbus.Config{Driver: cfg.EventBusDriver, Client: redisClient, Logger: log})
+	eventBus := eventbus.NewEventBus(eventbus.Config{Driver: cfg.EventBusDriver, Client: redisClient.Cmdable(), Logger: log})
+
+	dbPool, err := db.NewPrimaryPool(ctx, cfg.SupabaseDBURL)
+	if err != nil {
+		log.Fatal("db pool", zap.Error(err))
+	}
+	defer dbPool.Close()
 
 	mtlsCreds, err := loadMTLSCredentials()
 	if err != nil {
@@ -51,19 +59,20 @@ func main() {
 		log.Fatal("grpc clients", zap.Error(err))
 	}
 
-	hub, err := gatewayinternal.NewHub(log, redisClient, eventBus)
-	if err != nil {
-		log.Fatal("new hub", zap.Error(err))
-	}
-
 	server := &gatewayinternal.Server{
 		Config:      cfg,
 		Logger:      log,
-		Hub:         hub,
 		EventBus:    eventBus,
 		Redis:       redisClient,
+		DB:          dbPool,
 		GRPCClients: grpcClients,
 	}
+
+	hub, err := gatewayinternal.NewHub(log, redisClient, eventBus, server.UserExists)
+	if err != nil {
+		log.Fatal("new hub", zap.Error(err))
+	}
+	server.Hub = hub
 
 	router := server.Routes()
 
@@ -89,7 +98,7 @@ func main() {
 		}
 	}()
 
-	signalCtx, stop := syscall.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	<-signalCtx.Done()
 	stop()
 
@@ -117,7 +126,8 @@ func loadMTLSCredentials() (credentials.TransportCredentials, error) {
 	keyPEM := os.Getenv("MTLS_CLIENT_KEY")
 	caPEM := os.Getenv("MTLS_CA_CERT")
 	if certPEM == "" || keyPEM == "" || caPEM == "" {
-		return nil, fmt.Errorf("mtls env missing")
+		// Single-EC2/local mode fallback.
+		return insecure.NewCredentials(), nil
 	}
 	cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
 	if err != nil {
