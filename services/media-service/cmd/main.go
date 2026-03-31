@@ -30,7 +30,7 @@ type mediaServer struct {
 
 func (s *mediaServer) RequestUploadURL(ctx context.Context, req *mediapb.RequestUploadURLRequest) (*mediapb.RequestUploadURLResponse, error) {
 	resp, err := s.svc.PresignUpload(ctx, media.PresignRequest{
-		UserID:      req.GetUserId(),
+		UserPhone:   req.GetOwnerPhone(),
 		ContentType: req.GetContentType(),
 		SizeBytes:   req.GetSize(),
 	})
@@ -45,23 +45,24 @@ func (s *mediaServer) RequestUploadURL(ctx context.Context, req *mediapb.Request
 }
 
 func (s *mediaServer) GetMediaItem(ctx context.Context, req *mediapb.GetMediaItemRequest) (*mediapb.GetMediaItemResponse, error) {
-	var id, bucket, objectKey, statusV string
+	var id, bucket, objectKey, statusV, ownerPhone string
 	var createdAt time.Time
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, bucket, object_key, status, created_at
+		SELECT id, bucket, object_key, status, created_at, owner_phone
 		FROM media_objects
 		WHERE id = $1
-	`, req.GetMediaId()).Scan(&id, &bucket, &objectKey, &statusV, &createdAt)
+	`, req.GetMediaId()).Scan(&id, &bucket, &objectKey, &statusV, &createdAt, &ownerPhone)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "media item not found")
 	}
 	return &mediapb.GetMediaItemResponse{
 		Item: &mediapb.MediaItem{
-			MediaId:   id,
-			Bucket:    bucket,
-			ObjectKey: objectKey,
-			Status:    statusV,
-			CreatedAt: timestamppb.New(createdAt),
+			MediaId:    id,
+			OwnerPhone: ownerPhone,
+			Bucket:     bucket,
+			ObjectKey:  objectKey,
+			Status:     statusV,
+			CreatedAt:  timestamppb.New(createdAt),
 		},
 	}, nil
 }

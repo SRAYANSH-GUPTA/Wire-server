@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -20,7 +21,9 @@ func NewClusterClient(ctx context.Context, addrs []string, logger *zap.Logger) (
 		return nil, fmt.Errorf("redis: addrs must not be empty")
 	}
 	opts := &goredis.UniversalOptions{
-		Addrs: addrs,
+		Addrs:    addrs,
+		Username: strings.TrimSpace(os.Getenv("REDIS_USERNAME")),
+		Password: strings.TrimSpace(os.Getenv("REDIS_PASSWORD")),
 	}
 	client := goredis.NewUniversalClient(opts)
 	if err := client.Ping(ctx).Err(); err != nil {

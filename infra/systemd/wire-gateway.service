@@ -1,0 +1,16 @@
+[Unit]
+Description=Wire API Gateway
+After=network.target wire-chat.service wire-call.service wire-media.service wire-presence.service wire-user.service redis-server.service
+Wants=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/srayansh/Documents/Golang/Wire-server
+EnvironmentFile=/home/srayansh/Documents/Golang/Wire-server/infra/env/api-gateway.env
+ExecStart=/home/srayansh/Documents/Golang/Wire-server/bin/api-gateway
+Restart=always
+RestartSec=3
+User=srayansh
+
+[Install]
+WantedBy=multi-user.target

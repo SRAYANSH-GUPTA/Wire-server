@@ -7,13 +7,13 @@ option go_package = "wire-server/pkg/proto/presencepb";
 import "google/protobuf/timestamp.proto";
 
 message PresenceRecord {
-  string user_id = 1;
+  string user_phone = 1;
   string status = 2;
   google.protobuf.Timestamp last_seen = 3;
 }
 
 message GetPresenceRequest {
-  string user_id = 1;
+  string user_phone = 1;
 }
 
 message GetPresenceResponse {
@@ -21,7 +21,7 @@ message GetPresenceResponse {
 }
 
 message GetBulkPresenceRequest {
-  repeated string user_ids = 1;
+  repeated string user_phones = 1;
 }
 
 message GetBulkPresenceResponse {

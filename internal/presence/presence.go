@@ -22,29 +22,29 @@ func New(client *goredis.Client) *Tracker {
 	}
 }
 
-func (t *Tracker) SetOnline(ctx context.Context, userID string) error {
-	if err := t.client.Set(ctx, t.prefix+userID, "online", t.ttl).Err(); err != nil {
+func (t *Tracker) SetOnline(ctx context.Context, userPhone string) error {
+	if err := t.client.Set(ctx, t.prefix+userPhone, "online", t.ttl).Err(); err != nil {
 		return fmt.Errorf("presence.SetOnline: %w", err)
 	}
 	return nil
 }
 
-func (t *Tracker) SetOffline(ctx context.Context, userID string) error {
-	if err := t.client.Set(ctx, t.prefix+userID, "offline", t.ttl).Err(); err != nil {
+func (t *Tracker) SetOffline(ctx context.Context, userPhone string) error {
+	if err := t.client.Set(ctx, t.prefix+userPhone, "offline", t.ttl).Err(); err != nil {
 		return fmt.Errorf("presence.SetOffline: %w", err)
 	}
 	return nil
 }
 
-func (t *Tracker) TouchLastSeen(ctx context.Context, userID string) error {
-	if err := t.client.Set(ctx, t.prefix+userID+":last_seen", time.Now().UTC().Format(time.RFC3339Nano), 24*time.Hour).Err(); err != nil {
+func (t *Tracker) TouchLastSeen(ctx context.Context, userPhone string) error {
+	if err := t.client.Set(ctx, t.prefix+userPhone+":last_seen", time.Now().UTC().Format(time.RFC3339Nano), 24*time.Hour).Err(); err != nil {
 		return fmt.Errorf("presence.TouchLastSeen: %w", err)
 	}
 	return nil
 }
 
-func (t *Tracker) IsOnline(ctx context.Context, userID string) (bool, error) {
-	value, err := t.client.Get(ctx, t.prefix+userID).Result()
+func (t *Tracker) IsOnline(ctx context.Context, userPhone string) (bool, error) {
+	value, err := t.client.Get(ctx, t.prefix+userPhone).Result()
 	if err == goredis.Nil {
 		return false, nil
 	}

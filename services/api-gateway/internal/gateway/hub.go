@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -49,6 +50,8 @@ type Connection struct {
 	user     middleware.Claims
 	bytesMu  sync.Mutex
 	lastPong time.Time
+	ctx      context.Context
+	cancel   context.CancelFunc
 }
 
 func NewHub(logger *zap.Logger, redisClient *redis.Client, eventBus eventbus.EventBus, lookup func(context.Context, string) (bool, error)) (*Hub, error) {
@@ -94,7 +97,13 @@ func (h *Hub) Run(ctx context.Context) error {
 			h.checkHeartbeats()
 		default:
 			n, err := unix.EpollWait(h.fd, events, 50)
-			if err != nil && err != syscall.EINTR {
+			if err != nil {
+				if errors.Is(err, syscall.EINTR) {
+					continue
+				}
+				if errors.Is(err, syscall.EBADF) {
+					return nil // Exit gracefully on closed fd
+				}
 				h.logger.Warn("epoll wait", zap.Error(err))
 				continue
 			}
@@ -134,6 +143,37 @@ func (h *Hub) add(c *Connection) {
 	if err := unix.EpollCtl(h.fd, unix.EPOLL_CTL_ADD, c.fd, ev); err != nil {
 		h.logger.Warn("epoll add", zap.Error(err))
 	}
+
+	// Mark user as online in Redis for chat-service delivery
+	presenceKey := "presence:user:" + c.user.Phone
+	if err := h.redis.Set(context.Background(), presenceKey, "online", 24*time.Hour); err != nil {
+		h.logger.Warn("mark online failed", zap.String("phone", c.user.Phone), zap.Error(err))
+	}
+
+	// Subscribe to user's Redis channel for chat messages
+	go h.subscribeUser(c)
+}
+
+func (h *Hub) subscribeUser(c *Connection) {
+	pubsub, err := h.redis.Subscribe(c.ctx, "pod:user:"+c.user.Phone)
+	if err != nil {
+		h.logger.Warn("redis subscribe failed", zap.String("phone", c.user.Phone), zap.Error(err))
+		return
+	}
+	defer pubsub.Close()
+
+	ch := pubsub.Channel()
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			c.Send([]byte(msg.Payload))
+		}
+	}
 }
 
 func (h *Hub) remove(c *Connection) {
@@ -143,10 +183,16 @@ func (h *Hub) remove(c *Connection) {
 	h.activeMetric.Dec()
 	_ = unix.EpollCtl(h.fd, unix.EPOLL_CTL_DEL, c.fd, nil)
 	if c != nil {
+		c.cancel() // Stop the Redis subscription goroutine
 		_ = c.Close()
+
+		// Remove online status from Redis
+		presenceKey := "presence:user:" + c.user.Phone
+		_ = h.redis.Cmdable().Del(context.Background(), presenceKey).Err()
+
 		_ = h.eventBus.Publish(context.Background(), "user.offline", &presencepb.PresenceRecord{
-			UserId: c.user.UserID,
-			Status: "offline",
+			UserPhone: c.user.Phone,
+			Status:    "offline",
 		})
 	}
 }
@@ -162,7 +208,7 @@ func (h *Hub) deliver(payload []byte, targets []string) {
 	}
 	for _, target := range targets {
 		for _, conn := range h.conns {
-			if conn.user.UserID == target {
+			if conn.user.Phone == target {
 				conn.Send(payload)
 			}
 		}
@@ -202,7 +248,7 @@ func (h *Hub) handleRead(conn *Connection) {
 		}
 		return
 	}
-	if !h.allowWSMessage(conn.user.UserID) {
+	if !h.allowWSMessage(conn.user.Phone) {
 		return
 	}
 	h.Broadcast(data)
@@ -222,8 +268,8 @@ func (h *Hub) respondLookup(conn *Connection, phone string) {
 	conn.Send(payload)
 }
 
-func (h *Hub) allowWSMessage(userID string) bool {
-	key := fmt.Sprintf("rl_ws:%s:%d", userID, time.Now().Unix()/60)
+func (h *Hub) allowWSMessage(userPhone string) bool {
+	key := fmt.Sprintf("rl_ws:%s:%d", userPhone, time.Now().Unix()/60)
 	count, err := h.redis.Incr(context.Background(), key).Result()
 	if err == nil && count == 1 {
 		_ = h.redis.Expire(context.Background(), key, time.Minute).Err()
@@ -251,11 +297,14 @@ func NewConnection(conn net.Conn, claims middleware.Claims) (*Connection, error)
 	}); err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Connection{
 		Conn:     conn,
 		fd:       fd,
 		user:     claims,
 		lastPong: time.Now(),
+		ctx:      ctx,
+		cancel:   cancel,
 	}, nil
 }
 

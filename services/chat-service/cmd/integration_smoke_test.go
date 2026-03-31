@@ -61,13 +61,13 @@ func TestChatAPISmoke(t *testing.T) {
 		log,
 	)
 
-	senderID := "smoke-sender"
-	recipientID := "smoke-recipient"
+	senderPhone := "9058214347"
+	recipientPhone := "9058214348"
 	sendResp, err := svc.SendMessage(ctx, &chatpb.SendMessageRequest{
-		SenderId:     senderID,
-		RecipientIds: []string{recipientID},
-		Body:         "hello from smoke test",
-		TraceId:      "smoke-trace",
+		SenderPhone:     senderPhone,
+		RecipientPhones: []string{recipientPhone},
+		Body:            "hello from smoke test",
+		TraceId:         "smoke-trace",
 	})
 	if err != nil {
 		t.Fatalf("SendMessage: %v", err)
@@ -77,7 +77,7 @@ func TestChatAPISmoke(t *testing.T) {
 	}
 
 	historyResp, err := svc.GetHistory(ctx, &chatpb.GetHistoryRequest{
-		ConversationId: buildConversationID(senderID, []string{recipientID}, ""),
+		ConversationId: buildConversationID(senderPhone, []string{recipientPhone}, ""),
 		Limit:          10,
 	})
 	if err != nil {
@@ -89,14 +89,14 @@ func TestChatAPISmoke(t *testing.T) {
 
 	if _, err := svc.MarkDelivered(ctx, &chatpb.MarkStatusRequest{
 		MessageId: sendResp.GetMessageId(),
-		UserId:    recipientID,
+		UserPhone: recipientPhone,
 	}); err != nil {
 		t.Fatalf("MarkDelivered: %v", err)
 	}
 
 	if _, err := svc.MarkRead(ctx, &chatpb.MarkStatusRequest{
 		MessageId: sendResp.GetMessageId(),
-		UserId:    recipientID,
+		UserPhone: recipientPhone,
 	}); err != nil {
 		t.Fatalf("MarkRead: %v", err)
 	}
