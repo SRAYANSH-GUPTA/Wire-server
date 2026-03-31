@@ -1,0 +1,16 @@
+[Unit]
+Description=Wire Chat Service
+After=network.target redis-server.service
+Wants=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/srayansh/Documents/Golang/Wire-server
+EnvironmentFile=/home/srayansh/Documents/Golang/Wire-server/infra/env/chat-service.env
+ExecStart=/home/srayansh/Documents/Golang/Wire-server/bin/chat-service
+Restart=always
+RestartSec=3
+User=srayansh
+
+[Install]
+WantedBy=multi-user.target

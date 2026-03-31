@@ -7,15 +7,14 @@ option go_package = "wire-server/pkg/proto/userpb";
 import "google/protobuf/timestamp.proto";
 
 message User {
-  string user_id = 1;
-  string email = 2;
-  string display_name = 3;
-  string avatar_url = 4;
-  google.protobuf.Timestamp created_at = 5;
+  string user_phone = 1;
+  string display_name = 2;
+  string avatar_url = 3;
+  google.protobuf.Timestamp created_at = 4;
 }
 
 message GetUserRequest {
-  string user_id = 1;
+  string user_phone = 1;
 }
 
 message GetUserResponse {
@@ -23,13 +22,13 @@ message GetUserResponse {
 }
 
 message GetContactsRequest {
-  string user_id = 1;
+  string user_phone = 1;
   int32 limit = 2;
   string cursor = 3;
 }
 
 message Contact {
-  string user_id = 1;
+  string user_phone = 1;
   string phone_hash = 2;
 }
 
@@ -39,8 +38,8 @@ message GetContactsResponse {
 }
 
 message BlockUserRequest {
-  string user_id = 1;
-  string block_user_id = 2;
+  string user_phone = 1;
+  string block_user_phone = 2;
 }
 
 message BlockUserResponse {

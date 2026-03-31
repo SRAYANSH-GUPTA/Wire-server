@@ -51,7 +51,7 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/health", s.health)
 	r.Get("/metrics", promhttp.Handler().ServeHTTP)
 	r.Post("/auth/refresh", s.refreshToken)
-	r.With(middleware.AuthMiddleware(s.Config.JWTSecret, s.Config.SupabaseURL)).Post("/ws/connect", s.wsConnect)
+	r.With(middleware.AuthMiddleware(s.Config.JWTSecret, s.Config.SupabaseURL)).Get("/ws/connect", s.wsConnect)
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Use(middleware.AuthMiddleware(s.Config.JWTSecret, s.Config.SupabaseURL))
@@ -59,17 +59,17 @@ func (s *Server) Routes() http.Handler {
 		api.Get("/messages/{id}", s.getMessage)
 		api.Post("/media/upload", s.requestUpload)
 		api.Post("/calls/start", s.startCall)
-		api.Get("/users/{id}", s.getUser)
-		api.Get("/presence/{id}", s.getPresence)
+		api.Get("/users/{phone}", s.getUser)
+		api.Get("/presence/{phone}", s.getPresence)
 		api.Post("/users/lookup", s.lookupUsers)
 		api.Post("/groups", s.createGroup)
 		api.Get("/groups", s.listGroups)
 		api.Get("/groups/{id}", s.getGroup)
 		api.Patch("/groups/{id}", s.updateGroup)
 		api.Post("/groups/{id}/members", s.addGroupMembers)
-		api.Delete("/groups/{id}/members/{user_id}", s.removeGroupMember)
-		api.Post("/groups/{id}/admins/{user_id}", s.promoteGroupAdmin)
-		api.Delete("/groups/{id}/admins/{user_id}", s.demoteGroupAdmin)
+		api.Delete("/groups/{id}/members/{phone}", s.removeGroupMember)
+		api.Post("/groups/{id}/admins/{phone}", s.promoteGroupAdmin)
+		api.Delete("/groups/{id}/admins/{phone}", s.demoteGroupAdmin)
 		api.Post("/groups/{id}/leave", s.leaveGroup)
 		api.Get("/groups/{id}/invite", s.getGroupInvite)
 		api.Post("/groups/{id}/invite/reset", s.resetGroupInvite)
@@ -87,13 +87,13 @@ func (s *Server) refreshToken(w http.ResponseWriter, r *http.Request) {
 	target := fmt.Sprintf("%s/auth/v1/token?grant_type=refresh_token", strings.TrimRight(s.Config.SupabaseURL, "/"))
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target, r.Body)
 	if err != nil {
-		http.Error(w, "proxy failed", http.StatusBadGateway)
+		writeError(w, http.StatusBadGateway, "proxy failed")
 		return
 	}
 	req.Header = r.Header.Clone()
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		http.Error(w, "upstream failed", http.StatusBadGateway)
+		writeError(w, http.StatusBadGateway, "upstream failed")
 		return
 	}
 	defer resp.Body.Close()
@@ -105,31 +105,34 @@ func (s *Server) refreshToken(w http.ResponseWriter, r *http.Request) {
 func (s *Server) wsConnect(w http.ResponseWriter, r *http.Request) {
 	claims, ok := middleware.ClaimsFromContext(r.Context())
 	if !ok {
-		http.Error(w, "missing claims", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "missing claims")
 		return
 	}
 	conn, _, _, err := ws.UpgradeHTTP(r, w)
 	if err != nil {
-		http.Error(w, "upgrade failed", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "upgrade failed")
 		return
 	}
 	c, err := NewConnection(conn, claims)
 	if err != nil {
-		http.Error(w, "connection failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "connection failed")
 		return
 	}
 	s.Hub.Register(c)
 }
 
 func (s *Server) createMessage(w http.ResponseWriter, r *http.Request) {
+	claims, _ := middleware.ClaimsFromContext(r.Context())
 	var body chatpb.SendMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
+	body.SenderPhone = claims.Phone
+	
 	resp, err := s.GRPCClients.Chat.SendMessage(r.Context(), &body)
 	if err != nil {
-		http.Error(w, "grpc failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "grpc failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -142,55 +145,63 @@ func (s *Server) getMessage(w http.ResponseWriter, r *http.Request) {
 		Limit:          1,
 	})
 	if err != nil {
-		http.Error(w, "grpc failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "grpc failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) requestUpload(w http.ResponseWriter, r *http.Request) {
+	claims, _ := middleware.ClaimsFromContext(r.Context())
 	var body mediapb.RequestUploadURLRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
+	// Inject owner phone from JWT
+	body.OwnerPhone = claims.Phone
+
 	resp, err := s.GRPCClients.Media.RequestUploadURL(r.Context(), &body)
 	if err != nil {
-		http.Error(w, "grpc failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "grpc failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) startCall(w http.ResponseWriter, r *http.Request) {
+	claims, _ := middleware.ClaimsFromContext(r.Context())
 	var body callpb.InitiateCallRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
+	// Inject caller phone from JWT
+	body.CallerPhone = claims.Phone
+
 	resp, err := s.GRPCClients.Call.InitiateCall(r.Context(), &body)
 	if err != nil {
-		http.Error(w, "grpc failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "grpc failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) getUser(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	resp, err := s.GRPCClients.User.GetUser(r.Context(), &userpb.GetUserRequest{UserId: id})
+	phone := chi.URLParam(r, "phone")
+	resp, err := s.GRPCClients.User.GetUser(r.Context(), &userpb.GetUserRequest{UserPhone: phone})
 	if err != nil {
-		http.Error(w, "grpc failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "grpc failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) getPresence(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	resp, err := s.GRPCClients.Presence.GetPresence(r.Context(), &presencepb.GetPresenceRequest{UserId: id})
+	phone := chi.URLParam(r, "phone")
+	resp, err := s.GRPCClients.Presence.GetPresence(r.Context(), &presencepb.GetPresenceRequest{UserPhone: phone})
 	if err != nil {
-		http.Error(w, "grpc failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "grpc failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -208,7 +219,7 @@ type LookupUsersResponse struct {
 func (s *Server) lookupUsers(w http.ResponseWriter, r *http.Request) {
 	var req LookupUsersRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	if len(req.Phones) == 0 {
@@ -219,13 +230,13 @@ func (s *Server) lookupUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := q.FindUsersByPhones(r.Context(), req.Phones)
 	if err != nil {
 		s.Logger.Error("lookup users", zap.Error(err))
-		http.Error(w, "db failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "db failed")
 		return
 	}
 	registered := make([]string, 0, len(users))
 	for _, u := range users {
-		if u.Phone != nil {
-			registered = append(registered, *u.Phone)
+		if u.Valid {
+			registered = append(registered, u.String)
 		}
 	}
 	phoneSet := make(map[string]bool)
@@ -257,7 +268,19 @@ func (s *Server) UserExists(ctx context.Context, phone string) (bool, error) {
 func writeJSON(w http.ResponseWriter, code int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(payload)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"result":  payload,
+	})
+}
+
+func writeError(w http.ResponseWriter, code int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": false,
+		"error":   message,
+	})
 }
 
 func copyHeader(dst, src http.Header) {
@@ -269,10 +292,10 @@ func copyHeader(dst, src http.Header) {
 }
 
 type createGroupRequest struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	AvatarURL   string   `json:"avatar_url"`
-	MemberIDs   []string `json:"member_ids"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	AvatarURL    string   `json:"avatar_url"`
+	MemberPhones []string `json:"member_phones"`
 }
 
 type updateGroupRequest struct {
@@ -282,7 +305,7 @@ type updateGroupRequest struct {
 }
 
 type groupMembersRequest struct {
-	MemberIDs []string `json:"member_ids"`
+	MemberPhones []string `json:"member_phones"`
 }
 
 type joinByInviteRequest struct {
@@ -290,7 +313,7 @@ type joinByInviteRequest struct {
 }
 
 type groupMemberResponse struct {
-	UserID    string    `json:"user_id"`
+	UserPhone string    `json:"user_phone"`
 	Role      string    `json:"role"`
 	AddedBy   *string   `json:"added_by,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
@@ -310,67 +333,67 @@ type groupResponse struct {
 }
 
 func (s *Server) createGroup(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+	userPhone, ok := currentUserPhone(r)
 	if !ok {
-		http.Error(w, "missing claims", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "missing claims")
 		return
 	}
 	var req createGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
-		http.Error(w, "name is required", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
 
-	memberIDs := dedupeIDs(req.MemberIDs, userID)
+	memberPhones := dedupeIDs(req.MemberPhones, userPhone)
 	groupID := fmt.Sprintf("grp_%d", time.Now().UTC().UnixNano())
 	inviteCode, err := randomHex(12)
 	if err != nil {
-		http.Error(w, "invite generation failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "invite generation failed")
 		return
 	}
 
 	tx, err := s.DB.Begin(r.Context())
 	if err != nil {
-		http.Error(w, "db begin failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "db begin failed")
 		return
 	}
 	defer tx.Rollback(r.Context())
 
 	_, err = tx.Exec(r.Context(), `
-		INSERT INTO groups (id, name, description, avatar_url, created_by, invite_code, created_at, updated_at)
+		INSERT INTO groups (id, name, description, avatar_url, created_by_phone, invite_code, created_at, updated_at)
 		VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, ''), $5, $6, NOW(), NOW())
-	`, groupID, req.Name, req.Description, req.AvatarURL, userID, inviteCode)
+	`, groupID, req.Name, req.Description, req.AvatarURL, userPhone, inviteCode)
 	if err != nil {
-		http.Error(w, "group create failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "group create failed")
 		return
 	}
 	_, err = tx.Exec(r.Context(), `
-		INSERT INTO group_members (group_id, user_id, role, added_by, created_at)
+		INSERT INTO group_members (group_id, user_phone, role, added_by, created_at)
 		VALUES ($1, $2, 'admin', $2, NOW())
-		ON CONFLICT (group_id, user_id) DO UPDATE SET role = 'admin'
-	`, groupID, userID)
+		ON CONFLICT (group_id, user_phone) DO UPDATE SET role = 'admin'
+	`, groupID, userPhone)
 	if err != nil {
-		http.Error(w, "creator membership failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "creator membership failed")
 		return
 	}
-	for _, memberID := range memberIDs {
+	for _, memberPhone := range memberPhones {
 		_, err := tx.Exec(r.Context(), `
-			INSERT INTO group_members (group_id, user_id, role, added_by, created_at)
+			INSERT INTO group_members (group_id, user_phone, role, added_by, created_at)
 			VALUES ($1, $2, 'member', $3, NOW())
-			ON CONFLICT (group_id, user_id) DO NOTHING
-		`, groupID, memberID, userID)
+			ON CONFLICT (group_id, user_phone) DO NOTHING
+		`, groupID, memberPhone, userPhone)
 		if err != nil {
-			http.Error(w, "add member failed", http.StatusInternalServerError)
+			writeError(w, http.StatusInternalServerError, "add member failed")
 			return
 		}
 	}
 	if err := tx.Commit(r.Context()); err != nil {
-		http.Error(w, "db commit failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "db commit failed")
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -380,21 +403,21 @@ func (s *Server) createGroup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listGroups(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+	userPhone, ok := currentUserPhone(r)
 	if !ok {
-		http.Error(w, "missing claims", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "missing claims")
 		return
 	}
 	rows, err := s.DB.Query(r.Context(), `
-		SELECT g.id, g.name, g.description, g.avatar_url, g.created_by, g.invite_code, g.created_at, g.updated_at,
+		SELECT g.id, g.name, g.description, g.avatar_url, g.created_by_phone, g.invite_code, g.created_at, g.updated_at,
 			   (SELECT COUNT(*) FROM group_members gm2 WHERE gm2.group_id = g.id)::int AS member_count
 		FROM groups g
 		INNER JOIN group_members gm ON gm.group_id = g.id
-		WHERE gm.user_id = $1
+		WHERE gm.user_phone = $1
 		ORDER BY g.updated_at DESC
-	`, userID)
+	`, userPhone)
 	if err != nil {
-		http.Error(w, "db failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "db failed")
 		return
 	}
 	defer rows.Close()
@@ -402,66 +425,66 @@ func (s *Server) listGroups(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var g groupResponse
 		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.AvatarURL, &g.CreatedBy, &g.InviteCode, &g.CreatedAt, &g.UpdatedAt, &g.MemberCount); err != nil {
-			http.Error(w, "scan failed", http.StatusInternalServerError)
+			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
 		out = append(out, g)
 	}
 	if err := rows.Err(); err != nil {
-		http.Error(w, "db rows failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "db rows failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"groups": out})
 }
 
 func (s *Server) getGroup(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+	userPhone, ok := currentUserPhone(r)
 	if !ok {
-		http.Error(w, "missing claims", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "missing claims")
 		return
 	}
 	groupID := chi.URLParam(r, "id")
 	if groupID == "" {
-		http.Error(w, "missing group id", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "missing group id")
 		return
 	}
-	if !s.isGroupMember(r.Context(), groupID, userID) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if !s.isGroupMember(r.Context(), groupID, userPhone) {
+		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 
 	var g groupResponse
 	err := s.DB.QueryRow(r.Context(), `
-		SELECT id, name, description, avatar_url, created_by, invite_code, created_at, updated_at,
+		SELECT id, name, description, avatar_url, created_by_phone, invite_code, created_at, updated_at,
 			   (SELECT COUNT(*) FROM group_members WHERE group_id = $1)::int
 		FROM groups
 		WHERE id = $1
 	`, groupID).Scan(&g.ID, &g.Name, &g.Description, &g.AvatarURL, &g.CreatedBy, &g.InviteCode, &g.CreatedAt, &g.UpdatedAt, &g.MemberCount)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			http.Error(w, "group not found", http.StatusNotFound)
+			writeError(w, http.StatusNotFound, "group not found")
 			return
 		}
-		http.Error(w, "db failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "db failed")
 		return
 	}
 
 	memberRows, err := s.DB.Query(r.Context(), `
-		SELECT user_id, role, added_by, created_at
+		SELECT user_phone, role, added_by, created_at
 		FROM group_members
 		WHERE group_id = $1
 		ORDER BY created_at ASC
 	`, groupID)
 	if err != nil {
-		http.Error(w, "members fetch failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "members fetch failed")
 		return
 	}
 	defer memberRows.Close()
 	members := make([]groupMemberResponse, 0)
 	for memberRows.Next() {
 		var m groupMemberResponse
-		if err := memberRows.Scan(&m.UserID, &m.Role, &m.AddedBy, &m.CreatedAt); err != nil {
-			http.Error(w, "member scan failed", http.StatusInternalServerError)
+		if err := memberRows.Scan(&m.UserPhone, &m.Role, &m.AddedBy, &m.CreatedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "member scan failed")
 			return
 		}
 		members = append(members, m)
@@ -471,23 +494,23 @@ func (s *Server) getGroup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateGroup(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+	userPhone, ok := currentUserPhone(r)
 	if !ok {
-		http.Error(w, "missing claims", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "missing claims")
 		return
 	}
 	groupID := chi.URLParam(r, "id")
 	if groupID == "" {
-		http.Error(w, "missing group id", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "missing group id")
 		return
 	}
-	if !s.isGroupAdmin(r.Context(), groupID, userID) {
-		http.Error(w, "admin required", http.StatusForbidden)
+	if !s.isGroupAdmin(r.Context(), groupID, userPhone) {
+		writeError(w, http.StatusForbidden, "admin required")
 		return
 	}
 	var req updateGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	_, err := s.DB.Exec(r.Context(), `
@@ -499,37 +522,37 @@ func (s *Server) updateGroup(w http.ResponseWriter, r *http.Request) {
 		WHERE id = $1
 	`, groupID, req.Name, req.Description, req.AvatarURL)
 	if err != nil {
-		http.Error(w, "update failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
 func (s *Server) addGroupMembers(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+	userPhone, ok := currentUserPhone(r)
 	if !ok {
-		http.Error(w, "missing claims", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "missing claims")
 		return
 	}
 	groupID := chi.URLParam(r, "id")
-	if !s.isGroupAdmin(r.Context(), groupID, userID) {
-		http.Error(w, "admin required", http.StatusForbidden)
+	if !s.isGroupAdmin(r.Context(), groupID, userPhone) {
+		writeError(w, http.StatusForbidden, "admin required")
 		return
 	}
 	var req groupMembersRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
-	memberIDs := dedupeIDs(req.MemberIDs, "")
-	for _, memberID := range memberIDs {
+	memberPhones := dedupeIDs(req.MemberPhones, "")
+	for _, memberPhone := range memberPhones {
 		_, err := s.DB.Exec(r.Context(), `
-			INSERT INTO group_members (group_id, user_id, role, added_by, created_at)
+			INSERT INTO group_members (group_id, user_phone, role, added_by, created_at)
 			VALUES ($1, $2, 'member', $3, NOW())
-			ON CONFLICT (group_id, user_id) DO NOTHING
-		`, groupID, memberID, userID)
+			ON CONFLICT (group_id, user_phone) DO NOTHING
+		`, groupID, memberPhone, userPhone)
 		if err != nil {
-			http.Error(w, "add member failed", http.StatusInternalServerError)
+			writeError(w, http.StatusInternalServerError, "add member failed")
 			return
 		}
 	}
@@ -538,28 +561,28 @@ func (s *Server) addGroupMembers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) removeGroupMember(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+	userPhone, ok := currentUserPhone(r)
 	if !ok {
-		http.Error(w, "missing claims", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "missing claims")
 		return
 	}
 	groupID := chi.URLParam(r, "id")
-	targetID := chi.URLParam(r, "user_id")
-	if !s.isGroupAdmin(r.Context(), groupID, userID) {
-		http.Error(w, "admin required", http.StatusForbidden)
+	targetPhone := chi.URLParam(r, "phone")
+	if !s.isGroupAdmin(r.Context(), groupID, userPhone) {
+		writeError(w, http.StatusForbidden, "admin required")
 		return
 	}
-	if targetID == "" {
-		http.Error(w, "missing user id", http.StatusBadRequest)
+	if targetPhone == "" {
+		writeError(w, http.StatusBadRequest, "missing phone")
 		return
 	}
-	if s.isGroupAdmin(r.Context(), groupID, targetID) && s.adminCount(r.Context(), groupID) <= 1 {
-		http.Error(w, "cannot remove last admin", http.StatusBadRequest)
+	if s.isGroupAdmin(r.Context(), groupID, targetPhone) && s.adminCount(r.Context(), groupID) <= 1 {
+		writeError(w, http.StatusBadRequest, "cannot remove last admin")
 		return
 	}
-	_, err := s.DB.Exec(r.Context(), `DELETE FROM group_members WHERE group_id = $1 AND user_id = $2`, groupID, targetID)
+	_, err := s.DB.Exec(r.Context(), `DELETE FROM group_members WHERE group_id = $1 AND user_phone = $2`, groupID, targetPhone)
 	if err != nil {
-		http.Error(w, "remove failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "remove failed")
 		return
 	}
 	_, _ = s.DB.Exec(r.Context(), `UPDATE groups SET updated_at = NOW() WHERE id = $1`, groupID)
@@ -567,24 +590,24 @@ func (s *Server) removeGroupMember(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) promoteGroupAdmin(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+	userPhone, ok := currentUserPhone(r)
 	if !ok {
-		http.Error(w, "missing claims", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "missing claims")
 		return
 	}
 	groupID := chi.URLParam(r, "id")
-	targetID := chi.URLParam(r, "user_id")
-	if !s.isGroupAdmin(r.Context(), groupID, userID) {
-		http.Error(w, "admin required", http.StatusForbidden)
+	targetPhone := chi.URLParam(r, "phone")
+	if !s.isGroupAdmin(r.Context(), groupID, userPhone) {
+		writeError(w, http.StatusForbidden, "admin required")
 		return
 	}
 	_, err := s.DB.Exec(r.Context(), `
 		UPDATE group_members
 		SET role = 'admin'
-		WHERE group_id = $1 AND user_id = $2
-	`, groupID, targetID)
+		WHERE group_id = $1 AND user_phone = $2
+	`, groupID, targetPhone)
 	if err != nil {
-		http.Error(w, "promote failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "promote failed")
 		return
 	}
 	_, _ = s.DB.Exec(r.Context(), `UPDATE groups SET updated_at = NOW() WHERE id = $1`, groupID)
@@ -592,32 +615,32 @@ func (s *Server) promoteGroupAdmin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) demoteGroupAdmin(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+	userPhone, ok := currentUserPhone(r)
 	if !ok {
-		http.Error(w, "missing claims", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "missing claims")
 		return
 	}
 	groupID := chi.URLParam(r, "id")
-	targetID := chi.URLParam(r, "user_id")
-	if !s.isGroupAdmin(r.Context(), groupID, userID) {
-		http.Error(w, "admin required", http.StatusForbidden)
+	targetPhone := chi.URLParam(r, "phone")
+	if !s.isGroupAdmin(r.Context(), groupID, userPhone) {
+		writeError(w, http.StatusForbidden, "admin required")
 		return
 	}
-	if !s.isGroupAdmin(r.Context(), groupID, targetID) {
-		http.Error(w, "target is not admin", http.StatusBadRequest)
+	if !s.isGroupAdmin(r.Context(), groupID, targetPhone) {
+		writeError(w, http.StatusBadRequest, "target is not admin")
 		return
 	}
 	if s.adminCount(r.Context(), groupID) <= 1 {
-		http.Error(w, "cannot demote last admin", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "cannot demote last admin")
 		return
 	}
 	_, err := s.DB.Exec(r.Context(), `
 		UPDATE group_members
 		SET role = 'member'
-		WHERE group_id = $1 AND user_id = $2
-	`, groupID, targetID)
+		WHERE group_id = $1 AND user_phone = $2
+	`, groupID, targetPhone)
 	if err != nil {
-		http.Error(w, "demote failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "demote failed")
 		return
 	}
 	_, _ = s.DB.Exec(r.Context(), `UPDATE groups SET updated_at = NOW() WHERE id = $1`, groupID)
@@ -625,47 +648,47 @@ func (s *Server) demoteGroupAdmin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) leaveGroup(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+	userPhone, ok := currentUserPhone(r)
 	if !ok {
-		http.Error(w, "missing claims", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "missing claims")
 		return
 	}
 	groupID := chi.URLParam(r, "id")
 	if groupID == "" {
-		http.Error(w, "missing group id", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "missing group id")
 		return
 	}
-	if !s.isGroupMember(r.Context(), groupID, userID) {
-		http.Error(w, "not a group member", http.StatusBadRequest)
+	if !s.isGroupMember(r.Context(), groupID, userPhone) {
+		writeError(w, http.StatusBadRequest, "not a group member")
 		return
 	}
 	tx, err := s.DB.Begin(r.Context())
 	if err != nil {
-		http.Error(w, "db begin failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "db begin failed")
 		return
 	}
 	defer tx.Rollback(r.Context())
 
-	if s.isGroupAdmin(r.Context(), groupID, userID) && s.adminCount(r.Context(), groupID) <= 1 {
-		var promoteID string
+	if s.isGroupAdmin(r.Context(), groupID, userPhone) && s.adminCount(r.Context(), groupID) <= 1 {
+		var promotePhone string
 		err := tx.QueryRow(r.Context(), `
-			SELECT user_id
+			SELECT user_phone
 			FROM group_members
-			WHERE group_id = $1 AND user_id <> $2
+			WHERE group_id = $1 AND user_phone <> $2
 			ORDER BY created_at ASC
 			LIMIT 1
-		`, groupID, userID).Scan(&promoteID)
+		`, groupID, userPhone).Scan(&promotePhone)
 		if err == nil {
 			_, _ = tx.Exec(r.Context(), `
 				UPDATE group_members SET role = 'admin'
-				WHERE group_id = $1 AND user_id = $2
-			`, groupID, promoteID)
+				WHERE group_id = $1 AND user_phone = $2
+			`, groupID, promotePhone)
 		}
 	}
 
-	_, err = tx.Exec(r.Context(), `DELETE FROM group_members WHERE group_id = $1 AND user_id = $2`, groupID, userID)
+	_, err = tx.Exec(r.Context(), `DELETE FROM group_members WHERE group_id = $1 AND user_phone = $2`, groupID, userPhone)
 	if err != nil {
-		http.Error(w, "leave failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "leave failed")
 		return
 	}
 	var memberCount int
@@ -675,116 +698,116 @@ func (s *Server) leaveGroup(w http.ResponseWriter, r *http.Request) {
 		_, _ = tx.Exec(r.Context(), `UPDATE groups SET updated_at = NOW() WHERE id = $1`, groupID)
 	}
 	if err := tx.Commit(r.Context()); err != nil {
-		http.Error(w, "db commit failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "db commit failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
 func (s *Server) getGroupInvite(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+	userPhone, ok := currentUserPhone(r)
 	if !ok {
-		http.Error(w, "missing claims", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "missing claims")
 		return
 	}
 	groupID := chi.URLParam(r, "id")
-	if !s.isGroupAdmin(r.Context(), groupID, userID) {
-		http.Error(w, "admin required", http.StatusForbidden)
+	if !s.isGroupAdmin(r.Context(), groupID, userPhone) {
+		writeError(w, http.StatusForbidden, "admin required")
 		return
 	}
 	var code string
 	if err := s.DB.QueryRow(r.Context(), `SELECT invite_code FROM groups WHERE id = $1`, groupID).Scan(&code); err != nil {
-		http.Error(w, "group not found", http.StatusNotFound)
+		writeError(w, http.StatusNotFound, "group not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"invite_code": code})
 }
 
 func (s *Server) resetGroupInvite(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+	userPhone, ok := currentUserPhone(r)
 	if !ok {
-		http.Error(w, "missing claims", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "missing claims")
 		return
 	}
 	groupID := chi.URLParam(r, "id")
-	if !s.isGroupAdmin(r.Context(), groupID, userID) {
-		http.Error(w, "admin required", http.StatusForbidden)
+	if !s.isGroupAdmin(r.Context(), groupID, userPhone) {
+		writeError(w, http.StatusForbidden, "admin required")
 		return
 	}
 	code, err := randomHex(12)
 	if err != nil {
-		http.Error(w, "invite generation failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "invite generation failed")
 		return
 	}
 	_, err = s.DB.Exec(r.Context(), `UPDATE groups SET invite_code = $2, updated_at = NOW() WHERE id = $1`, groupID, code)
 	if err != nil {
-		http.Error(w, "invite reset failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "invite reset failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"invite_code": code})
 }
 
 func (s *Server) joinByInvite(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+	userPhone, ok := currentUserPhone(r)
 	if !ok {
-		http.Error(w, "missing claims", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "missing claims")
 		return
 	}
 	var req joinByInviteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	req.InviteCode = strings.TrimSpace(req.InviteCode)
 	if req.InviteCode == "" {
-		http.Error(w, "invite_code is required", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invite_code is required")
 		return
 	}
 	var groupID string
 	if err := s.DB.QueryRow(r.Context(), `SELECT id FROM groups WHERE invite_code = $1`, req.InviteCode).Scan(&groupID); err != nil {
-		http.Error(w, "invalid invite", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid invite")
 		return
 	}
 	_, err := s.DB.Exec(r.Context(), `
-		INSERT INTO group_members (group_id, user_id, role, added_by, created_at)
+		INSERT INTO group_members (group_id, user_phone, role, added_by, created_at)
 		VALUES ($1, $2, 'member', $2, NOW())
-		ON CONFLICT (group_id, user_id) DO NOTHING
-	`, groupID, userID)
+		ON CONFLICT (group_id, user_phone) DO NOTHING
+	`, groupID, userPhone)
 	if err != nil {
-		http.Error(w, "join failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "join failed")
 		return
 	}
 	_, _ = s.DB.Exec(r.Context(), `UPDATE groups SET updated_at = NOW() WHERE id = $1`, groupID)
 	writeJSON(w, http.StatusOK, map[string]any{"group_id": groupID})
 }
 
-func currentUserID(r *http.Request) (string, bool) {
+func currentUserPhone(r *http.Request) (string, bool) {
 	claims, ok := middleware.ClaimsFromContext(r.Context())
-	if !ok || strings.TrimSpace(claims.UserID) == "" {
+	if !ok || strings.TrimSpace(claims.Phone) == "" {
 		return "", false
 	}
-	return claims.UserID, true
+	return claims.Phone, true
 }
 
-func (s *Server) isGroupMember(ctx context.Context, groupID, userID string) bool {
+func (s *Server) isGroupMember(ctx context.Context, groupID, phone string) bool {
 	var exists bool
 	err := s.DB.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM group_members
-			WHERE group_id = $1 AND user_id = $2
+			WHERE group_id = $1 AND user_phone = $2
 		)
-	`, groupID, userID).Scan(&exists)
+	`, groupID, phone).Scan(&exists)
 	return err == nil && exists
 }
 
-func (s *Server) isGroupAdmin(ctx context.Context, groupID, userID string) bool {
+func (s *Server) isGroupAdmin(ctx context.Context, groupID, phone string) bool {
 	var exists bool
 	err := s.DB.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM group_members
-			WHERE group_id = $1 AND user_id = $2 AND role = 'admin'
+			WHERE group_id = $1 AND user_phone = $2 AND role = 'admin'
 		)
-	`, groupID, userID).Scan(&exists)
+	`, groupID, phone).Scan(&exists)
 	return err == nil && exists
 }
 

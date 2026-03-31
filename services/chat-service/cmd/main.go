@@ -52,7 +52,11 @@ func main() {
 	}
 
 	redisAddr := firstAddr(cfg.RedisClusterAddrs)
-	rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     redisAddr,
+		Username: strings.TrimSpace(os.Getenv("REDIS_USERNAME")),
+		Password: strings.TrimSpace(os.Getenv("REDIS_PASSWORD")),
+	})
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		log.Fatal("redis connect failed", zap.Error(err))
 	}

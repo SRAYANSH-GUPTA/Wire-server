@@ -1,0 +1,16 @@
+[Unit]
+Description=Wire Call Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/srayansh/Documents/Golang/Wire-server
+EnvironmentFile=/home/srayansh/Documents/Golang/Wire-server/infra/env/call-service.env
+ExecStart=/home/srayansh/Documents/Golang/Wire-server/bin/call-service
+Restart=always
+RestartSec=3
+User=srayansh
+
+[Install]
+WantedBy=multi-user.target

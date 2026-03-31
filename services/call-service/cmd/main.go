@@ -69,7 +69,7 @@ func (s *callServer) EndCall(_ context.Context, req *callpb.EndCallRequest) (*ca
 }
 
 func (s *callServer) GetTurnCredentials(_ context.Context, req *callpb.GetTurnCredentialsRequest) (*callpb.GetTurnCredentialsResponse, error) {
-	username, password, exp := s.svc.TURNCredential(req.GetUserId(), 1*time.Hour)
+	username, password, exp := s.svc.TURNCredential(req.GetUserPhone(), 1*time.Hour)
 	return &callpb.GetTurnCredentialsResponse{
 		Username:  username,
 		Password:  password,

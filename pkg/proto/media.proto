@@ -7,7 +7,7 @@ option go_package = "wire-server/pkg/proto/mediapb";
 import "google/protobuf/timestamp.proto";
 
 message RequestUploadURLRequest {
-  string user_id = 1;
+  string owner_phone = 1;
   string content_type = 2;
   int64 size = 3;
 }
@@ -24,10 +24,11 @@ message GetMediaItemRequest {
 
 message MediaItem {
   string media_id = 1;
-  string bucket = 2;
-  string object_key = 3;
-  string status = 4;
-  google.protobuf.Timestamp created_at = 5;
+  string owner_phone = 2;
+  string bucket = 3;
+  string object_key = 4;
+  string status = 5;
+  google.protobuf.Timestamp created_at = 6;
 }
 
 message GetMediaItemResponse {

@@ -28,16 +28,16 @@ type presenceServer struct {
 }
 
 func (s *presenceServer) GetPresence(ctx context.Context, req *presencepb.GetPresenceRequest) (*presencepb.GetPresenceResponse, error) {
-	userID := strings.TrimSpace(req.GetUserId())
-	if userID == "" {
-		return nil, status.Error(codes.InvalidArgument, "user_id required")
+	userPhone := strings.TrimSpace(req.GetUserPhone())
+	if userPhone == "" {
+		return nil, status.Error(codes.InvalidArgument, "user_phone required")
 	}
-	online, err := s.tracker.IsOnline(ctx, userID)
+	online, err := s.tracker.IsOnline(ctx, userPhone)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "presence check failed: %v", err)
 	}
 	lastSeen := timestamppb.New(time.Now().UTC())
-	if raw, err := s.client.Get(ctx, "presence:user:"+userID+":last_seen").Result(); err == nil {
+	if raw, err := s.client.Get(ctx, "presence:user:"+userPhone+":last_seen").Result(); err == nil {
 		if ts, parseErr := time.Parse(time.RFC3339Nano, raw); parseErr == nil {
 			lastSeen = timestamppb.New(ts)
 		}
@@ -48,17 +48,17 @@ func (s *presenceServer) GetPresence(ctx context.Context, req *presencepb.GetPre
 	}
 	return &presencepb.GetPresenceResponse{
 		Presence: &presencepb.PresenceRecord{
-			UserId:   userID,
-			Status:   statusV,
-			LastSeen: lastSeen,
+			UserPhone: userPhone,
+			Status:    statusV,
+			LastSeen:  lastSeen,
 		},
 	}, nil
 }
 
 func (s *presenceServer) GetBulkPresence(ctx context.Context, req *presencepb.GetBulkPresenceRequest) (*presencepb.GetBulkPresenceResponse, error) {
-	out := make([]*presencepb.PresenceRecord, 0, len(req.GetUserIds()))
-	for _, userID := range req.GetUserIds() {
-		resp, err := s.GetPresence(ctx, &presencepb.GetPresenceRequest{UserId: userID})
+	out := make([]*presencepb.PresenceRecord, 0, len(req.GetUserPhones()))
+	for _, userPhone := range req.GetUserPhones() {
+		resp, err := s.GetPresence(ctx, &presencepb.GetPresenceRequest{UserPhone: userPhone})
 		if err != nil {
 			continue
 		}
@@ -73,7 +73,11 @@ func main() {
 
 	redisAddr := envOr("REDIS_CLUSTER_ADDRS", "127.0.0.1:6379")
 	first := strings.TrimSpace(strings.Split(redisAddr, ",")[0])
-	client := goredis.NewClient(&goredis.Options{Addr: first})
+	client := goredis.NewClient(&goredis.Options{
+		Addr:     first,
+		Username: strings.TrimSpace(os.Getenv("REDIS_USERNAME")),
+		Password: strings.TrimSpace(os.Getenv("REDIS_PASSWORD")),
+	})
 	if err := client.Ping(ctx).Err(); err != nil {
 		panic(err)
 	}

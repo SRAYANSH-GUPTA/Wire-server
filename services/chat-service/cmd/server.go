@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 	"github.com/go-playground/validator/v10"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -60,39 +60,36 @@ func newChatServer(
 }
 
 type sendMessageInput struct {
-	SenderID     string   `validate:"required"`
-	RecipientIDs []string `validate:"required_without=GroupID,max=256,dive,required"`
-	GroupID      string   `validate:"omitempty,max=128"`
-	Body         string   `validate:"required,max=8000"`
+	SenderPhone     string   `validate:"required"`
+	RecipientPhones []string `validate:"required_without=GroupID,max=256,dive,required"`
+	GroupID         string   `validate:"omitempty,max=128"`
+	Body            string   `validate:"required,max=8000"`
 }
 
 func (s *chatServer) SendMessage(ctx context.Context, req *chatpb.SendMessageRequest) (*chatpb.SendMessageResponse, error) {
 	in := sendMessageInput{
-		SenderID:     strings.TrimSpace(req.GetSenderId()),
-		RecipientIDs: req.GetRecipientIds(),
-		GroupID:      strings.TrimSpace(req.GetGroupId()),
-		Body:         req.GetBody(),
+		SenderPhone:     strings.TrimSpace(req.GetSenderPhone()),
+		RecipientPhones: req.GetRecipientPhones(),
+		GroupID:         strings.TrimSpace(req.GetGroupId()),
+		Body:            req.GetBody(),
 	}
 	if err := s.validate.Struct(in); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "validation failed: %v", err)
 	}
 
-	recipients := dedupeRecipients(in.RecipientIDs, in.SenderID)
+	recipients := dedupeRecipients(in.RecipientPhones, in.SenderPhone)
 	if in.GroupID != "" {
 		groupMembers, err := s.replicaQ.GetGroupMembers(ctx, in.GroupID)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "group members read failed: %v", err)
 		}
-		recipients = dedupeRecipients(groupMembers, in.SenderID)
+		recipients = dedupeRecipients(groupMembers, in.SenderPhone)
 	}
 	if len(recipients) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "no recipients resolved")
 	}
-	if in.GroupID == "" && len(recipients) > 1 {
-		return nil, status.Error(codes.InvalidArgument, "group_id is required for multi-recipient fan-out")
-	}
 
-	conversationID := buildConversationID(in.SenderID, recipients, in.GroupID)
+	conversationID := buildConversationID(in.SenderPhone, recipients, in.GroupID)
 	kind := "direct"
 	if in.GroupID != "" {
 		kind = "group"
@@ -100,47 +97,43 @@ func (s *chatServer) SendMessage(ctx context.Context, req *chatpb.SendMessageReq
 	if err := s.primaryQ.EnsureConversation(ctx, sqlc.EnsureConversationParams{ID: conversationID, Kind: kind}); err != nil {
 		return nil, status.Errorf(codes.Internal, "conversation ensure failed: %v", err)
 	}
-	var recipientID *string
-	var groupID *string
-	if in.GroupID != "" {
-		groupID = &in.GroupID
-	} else if len(recipients) > 0 {
-		recipientID = &recipients[0]
-	}
 
-	// write-op: persist message to primary
-	msg, err := s.primaryQ.InsertMessage(ctx, sqlc.InsertMessageParams{
-		SenderID:       in.SenderID,
-		RecipientID:    recipientID,
-		GroupID:        groupID,
+	arg := sqlc.InsertMessageParams{
+		SenderPhone:    in.SenderPhone,
 		BodyEncrypted:  in.Body,
 		BodyType:       "text",
 		Body:           in.Body,
 		ConversationID: conversationID,
-	})
+	}
+	if in.GroupID != "" {
+		arg.GroupID = pgtype.Text{String: in.GroupID, Valid: true}
+	} else if len(recipients) > 0 {
+		arg.RecipientPhone = pgtype.Text{String: recipients[0], Valid: true}
+	}
+
+	msg, err := s.primaryQ.InsertMessage(ctx, arg)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "message insert failed: %v", err)
 	}
+
 	_ = s.primaryQ.UpsertMessageStatus(ctx, sqlc.UpsertMessageStatusParams{
 		MessageID: msg.ID,
-		UserID:    in.SenderID,
+		UserPhone: in.SenderPhone,
 		Status:    "sent",
 	})
 
-	// publish msg.sent to event bus
 	eventMsg := &chatpb.Message{
-		MessageId:    msg.ID,
-		SenderId:     msg.SenderID,
-		RecipientIds: recipients,
-		Body:         msg.BodyEncrypted,
-		Status:       "sent",
-		CreatedAt:    timestamppb.New(msg.ServerTs),
+		MessageId:       msg.ID,
+		SenderPhone:     msg.SenderPhone,
+		RecipientPhones: recipients,
+		Body:            msg.BodyEncrypted,
+		Status:          "sent",
+		CreatedAt:       timestamppb.New(msg.ServerTs.Time),
 	}
 	if err := s.bus.Publish(ctx, "msg.sent", eventMsg); err != nil {
 		s.log.Warn("event publish msg.sent failed", zap.Error(err), zap.String("message_id", msg.ID))
 	}
 
-	// fan-out to recipients (group uses worker pool)
 	if in.GroupID != "" {
 		s.groupFanout(ctx, recipients, eventMsg)
 	} else {
@@ -151,7 +144,7 @@ func (s *chatServer) SendMessage(ctx context.Context, req *chatpb.SendMessageReq
 
 	return &chatpb.SendMessageResponse{
 		MessageId: msg.ID,
-		ServerTs:  timestamppb.New(msg.ServerTs),
+		ServerTs:  timestamppb.New(msg.ServerTs.Time),
 	}, nil
 }
 
@@ -171,7 +164,7 @@ func (s *chatServer) GetHistory(ctx context.Context, req *chatpb.GetHistoryReque
 	// read-op: query from replica
 	rows, err := s.replicaQ.GetMessageHistory(ctx, sqlc.GetMessageHistoryParams{
 		ConversationID: conversationID,
-		Cursor:         strings.TrimSpace(req.GetCursor()),
+		ID:             strings.TrimSpace(req.GetCursor()),
 		Limit:          limit,
 	})
 	if err != nil {
@@ -181,16 +174,16 @@ func (s *chatServer) GetHistory(ctx context.Context, req *chatpb.GetHistoryReque
 	out := make([]*chatpb.Message, 0, len(rows))
 	for _, row := range rows {
 		recipients := make([]string, 0, 1)
-		if row.RecipientID != nil && *row.RecipientID != "" {
-			recipients = append(recipients, *row.RecipientID)
+		if row.RecipientPhone.Valid && row.RecipientPhone.String != "" {
+			recipients = append(recipients, row.RecipientPhone.String)
 		}
 		out = append(out, &chatpb.Message{
-			MessageId:    row.ID,
-			SenderId:     row.SenderID,
-			RecipientIds: recipients,
-			Body:         row.BodyEncrypted,
-			Status:       "",
-			CreatedAt:    timestamppb.New(row.ServerTs),
+			MessageId:       row.ID,
+			SenderPhone:     row.SenderPhone,
+			RecipientPhones: recipients,
+			Body:            row.BodyEncrypted,
+			Status:          "",
+			CreatedAt:       timestamppb.New(row.ServerTs.Time),
 		})
 	}
 
@@ -214,15 +207,15 @@ func (s *chatServer) MarkRead(ctx context.Context, req *chatpb.MarkStatusRequest
 
 func (s *chatServer) markStatus(ctx context.Context, req *chatpb.MarkStatusRequest, statusValue, stream string) (*chatpb.MarkStatusResponse, error) {
 	msgID := strings.TrimSpace(req.GetMessageId())
-	userID := strings.TrimSpace(req.GetUserId())
-	if msgID == "" || userID == "" {
-		return nil, status.Error(codes.InvalidArgument, "message_id and user_id are required")
+	userPhone := strings.TrimSpace(req.GetUserPhone())
+	if msgID == "" || userPhone == "" {
+		return nil, status.Error(codes.InvalidArgument, "message_id and user_phone are required")
 	}
 
 	// write-op: update status in primary
 	if err := s.primaryQ.UpsertMessageStatus(ctx, sqlc.UpsertMessageStatusParams{
 		MessageID: msgID,
-		UserID:    userID,
+		UserPhone: userPhone,
 		Status:    statusValue,
 	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "status upsert failed: %v", err)
@@ -230,7 +223,7 @@ func (s *chatServer) markStatus(ctx context.Context, req *chatpb.MarkStatusReque
 
 	evt := &chatpb.MarkStatusRequest{
 		MessageId: msgID,
-		UserId:    userID,
+		UserPhone: userPhone,
 		Status:    statusValue,
 	}
 	if err := s.bus.Publish(ctx, stream, evt); err != nil {
@@ -265,13 +258,13 @@ func (s *chatServer) handleStatusEvent(ctx context.Context, stream string, paylo
 	tick := map[string]any{
 		"type":       stream,
 		"message_id": evt.GetMessageId(),
-		"user_id":    evt.GetUserId(),
+		"user_phone": evt.GetUserPhone(),
 		"status":     evt.GetStatus(),
 		"server_ts":  time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	raw, _ := json.Marshal(tick)
-	if err := s.redis.Publish(ctx, senderChannel(msg.SenderID), raw).Err(); err != nil {
-		s.log.Warn("sender tick publish failed", zap.Error(err), zap.String("sender_id", msg.SenderID))
+	if err := s.redis.Publish(ctx, senderChannel(msg.SenderPhone), raw).Err(); err != nil {
+		s.log.Warn("sender tick publish failed", zap.Error(err), zap.String("sender_phone", msg.SenderPhone))
 	}
 }
 
@@ -307,54 +300,54 @@ func (s *chatServer) groupFanout(ctx context.Context, recipients []string, event
 	wg.Wait()
 }
 
-func (s *chatServer) deliverToRecipient(ctx context.Context, userID string, eventMsg *chatpb.Message) {
+func (s *chatServer) deliverToRecipient(ctx context.Context, userPhone string, eventMsg *chatpb.Message) {
 	payload, _ := json.Marshal(map[string]any{
-		"type":         "msg.sent",
-		"message_id":   eventMsg.GetMessageId(),
-		"sender_id":    eventMsg.GetSenderId(),
-		"recipient_id": userID,
-		"body":         eventMsg.GetBody(),
-		"server_ts":    eventMsg.GetCreatedAt().AsTime().Format(time.RFC3339Nano),
+		"type":            "msg.sent",
+		"message_id":      eventMsg.GetMessageId(),
+		"sender_phone":    eventMsg.GetSenderPhone(),
+		"recipient_phone": userPhone,
+		"body":            eventMsg.GetBody(),
+		"server_ts":       eventMsg.GetCreatedAt().AsTime().Format(time.RFC3339Nano),
 	})
-	online := s.isOnline(ctx, userID)
+	online := s.isOnline(ctx, userPhone)
 	if online {
-		if err := s.redis.Publish(ctx, senderChannel(userID), payload).Err(); err != nil {
-			s.log.Warn("pubsub delivery failed", zap.Error(err), zap.String("user_id", userID))
+		if err := s.redis.Publish(ctx, senderChannel(userPhone), payload).Err(); err != nil {
+			s.log.Warn("pubsub delivery failed", zap.Error(err), zap.String("user_phone", userPhone))
 		}
 		_ = s.primaryQ.UpsertMessageStatus(ctx, sqlc.UpsertMessageStatusParams{
 			MessageID: eventMsg.GetMessageId(),
-			UserID:    userID,
+			UserPhone: userPhone,
 			Status:    "delivered",
 		})
 		return
 	}
-	offlineKey := offlinePrefix + userID
+	offlineKey := offlinePrefix + userPhone
 	pipe := s.redis.Pipeline()
 	pipe.LPush(ctx, offlineKey, payload)
 	pipe.Expire(ctx, offlineKey, offlineTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
-		s.log.Warn("offline queue push failed", zap.Error(err), zap.String("user_id", userID))
+		s.log.Warn("offline queue push failed", zap.Error(err), zap.String("user_phone", userPhone))
 	}
 }
 
-func (s *chatServer) isOnline(ctx context.Context, userID string) bool {
-	v, err := s.redis.Get(ctx, presenceKeyPrefix+userID).Result()
+func (s *chatServer) isOnline(ctx context.Context, userPhone string) bool {
+	v, err := s.redis.Get(ctx, presenceKeyPrefix+userPhone).Result()
 	if err != nil {
 		return false
 	}
 	return strings.EqualFold(v, "online")
 }
 
-func senderChannel(userID string) string {
-	return pubsubPrefix + userID
+func senderChannel(userPhone string) string {
+	return pubsubPrefix + userPhone
 }
 
-func dedupeRecipients(ids []string, senderID string) []string {
+func dedupeRecipients(ids []string, senderPhone string) []string {
 	out := make([]string, 0, len(ids))
 	seen := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		id = strings.TrimSpace(id)
-		if id == "" || id == senderID {
+		if id == "" || id == senderPhone {
 			continue
 		}
 		if _, ok := seen[id]; ok {

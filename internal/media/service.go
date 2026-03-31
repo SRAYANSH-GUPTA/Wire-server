@@ -23,7 +23,7 @@ type Service struct {
 }
 
 type PresignRequest struct {
-	UserID      string
+	UserPhone   string
 	ObjectKey   string
 	ContentType string
 	SizeBytes   int64
@@ -53,7 +53,7 @@ func (s *Service) PresignUpload(ctx context.Context, req PresignRequest) (Presig
 	objectID := newID("media")
 	key := req.ObjectKey
 	if key == "" {
-		key = path.Join("uploads", req.UserID, objectID)
+		key = path.Join("uploads", req.UserPhone, objectID)
 	}
 	escapedKey := escapeS3Key(key)
 	endpoint := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", s.bucket, s.region, escapedKey)
@@ -88,7 +88,7 @@ func (s *Service) PresignUpload(ctx context.Context, req PresignRequest) (Presig
 	if s.repo != nil {
 		if _, err := s.repo.InsertMediaObject(ctx, sqlc.InsertMediaObjectParams{
 			ID:          objectID,
-			OwnerID:     req.UserID,
+			OwnerPhone:  req.UserPhone,
 			Bucket:      s.bucket,
 			ObjectKey:   key,
 			ContentType: req.ContentType,

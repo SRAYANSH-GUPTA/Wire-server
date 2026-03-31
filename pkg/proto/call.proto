@@ -7,8 +7,8 @@ option go_package = "wire-server/pkg/proto/callpb";
 import "google/protobuf/timestamp.proto";
 
 message InitiateCallRequest {
-  string caller_id = 1;
-  repeated string callee_ids = 2;
+  string caller_phone = 1;
+  repeated string callee_phones = 2;
   string trace_id = 3;
 }
 
@@ -27,6 +27,24 @@ message JoinCallResponse {
   google.protobuf.Timestamp expires_at = 2;
 }
 
+message StartCallRequest {
+  string caller_phone = 1;
+  string target_phone = 2;
+  string type = 3;
+}
+
+message StartCallResponse {
+  string call_id = 1;
+}
+
+message CallEvent {
+  string call_id = 1;
+  string type = 2;
+  string from_phone = 3;
+  string to_phone = 4;
+  bytes payload = 5;
+}
+
 message EndCallRequest {
   string call_id = 1;
   string participant_id = 2;
@@ -37,7 +55,7 @@ message EndCallResponse {
 }
 
 message GetTurnCredentialsRequest {
-  string user_id = 1;
+  string user_phone = 1;
 }
 
 message GetTurnCredentialsResponse {
@@ -48,6 +66,7 @@ message GetTurnCredentialsResponse {
 
 service CallService {
   rpc InitiateCall(InitiateCallRequest) returns (InitiateCallResponse);
+  rpc StartCall(StartCallRequest) returns (StartCallResponse);
   rpc JoinCall(JoinCallRequest) returns (JoinCallResponse);
   rpc EndCall(EndCallRequest) returns (EndCallResponse);
   rpc GetTurnCredentials(GetTurnCredentialsRequest) returns (GetTurnCredentialsResponse);

@@ -29,17 +29,17 @@ type userServer struct {
 }
 
 func (s *userServer) GetUser(ctx context.Context, req *userpb.GetUserRequest) (*userpb.GetUserResponse, error) {
-	id := strings.TrimSpace(req.GetUserId())
-	if id == "" {
-		return nil, status.Error(codes.InvalidArgument, "user_id required")
+	phone := strings.TrimSpace(req.GetUserPhone())
+	if phone == "" {
+		return nil, status.Error(codes.InvalidArgument, "user_phone required")
 	}
-	var userID, email string
+	var userPhone string
 	var createdAt time.Time
 	err := s.db.QueryRow(ctx, `
-		SELECT id, email, created_at
+		SELECT phone, created_at
 		FROM users
-		WHERE id = $1
-	`, id).Scan(&userID, &email, &createdAt)
+		WHERE phone = $1
+	`, phone).Scan(&userPhone, &createdAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, status.Error(codes.NotFound, "user not found")
@@ -48,8 +48,7 @@ func (s *userServer) GetUser(ctx context.Context, req *userpb.GetUserRequest) (*
 	}
 	return &userpb.GetUserResponse{
 		User: &userpb.User{
-			UserId:      userID,
-			Email:       email,
+			UserPhone:   userPhone,
 			DisplayName: "",
 			AvatarUrl:   "",
 			CreatedAt:   timestamppb.New(createdAt),
@@ -69,8 +68,8 @@ func (s *userServer) GetContacts(_ context.Context, req *userpb.GetContactsReque
 }
 
 func (s *userServer) BlockUser(_ context.Context, req *userpb.BlockUserRequest) (*userpb.BlockUserResponse, error) {
-	if strings.TrimSpace(req.GetUserId()) == "" || strings.TrimSpace(req.GetBlockUserId()) == "" {
-		return nil, status.Error(codes.InvalidArgument, "user_id and block_user_id required")
+	if strings.TrimSpace(req.GetUserPhone()) == "" || strings.TrimSpace(req.GetBlockUserPhone()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "user_phone and block_user_phone required")
 	}
 	return &userpb.BlockUserResponse{Success: true}, nil
 }

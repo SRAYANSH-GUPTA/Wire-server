@@ -27,17 +27,17 @@ type Service struct {
 }
 
 type SendRequest struct {
-	ConversationID string
-	RecipientIDs   []string
-	SenderID       string
-	Body           string
-	MediaURL       *string
-	TraceID        string
+	ConversationID  string
+	RecipientPhones []string
+	SenderPhone     string
+	Body            string
+	MediaURL        *string
+	TraceID         string
 }
 
 type ReadRequest struct {
 	MessageID string
-	UserID    string
+	UserPhone string
 	TraceID   string
 }
 
@@ -48,78 +48,79 @@ func New(repo *sqlc.Queries, hub *ws.Hub, bus eventbus.EventBus, tracker *presen
 func (s *Service) SendMessage(ctx context.Context, req SendRequest) (sqlc.Message, error) {
 	conversationID := req.ConversationID
 	if conversationID == "" {
-		if len(req.RecipientIDs) == 1 {
-			conversationID = directConversationID(req.SenderID, req.RecipientIDs[0])
+		if len(req.RecipientPhones) == 1 {
+			conversationID = directConversationID(req.SenderPhone, req.RecipientPhones[0])
 		} else {
 			conversationID = newID("group")
 		}
 	}
 	kind := "group"
-	if len(req.RecipientIDs) == 1 {
+	if len(req.RecipientPhones) == 1 {
 		kind = "direct"
 	}
 	if err := s.repo.EnsureConversation(ctx, sqlc.EnsureConversationParams{ID: conversationID, Kind: kind}); err != nil {
 		return sqlc.Message{}, fmt.Errorf("chat.SendMessage ensure conversation: %w", err)
 	}
-	msg, err := s.repo.CreateMessage(ctx, sqlc.CreateMessageParams{
-		ID:             newID("msg"),
-		ConversationID: conversationID,
-		SenderID:       req.SenderID,
+	msg, err := s.repo.InsertMessage(ctx, sqlc.InsertMessageParams{
+		SenderPhone:    req.SenderPhone,
+		RecipientPhone: pgtype.Text{String: req.RecipientPhones[0], Valid: len(req.RecipientPhones) == 1},
 		Body:           req.Body,
-		MediaURL:       req.MediaURL,
+		BodyEncrypted:  req.Body, // temporary
+		BodyType:       "text",
+		ConversationID: conversationID,
 	})
 	if err != nil {
-		return sqlc.Message{}, fmt.Errorf("chat.SendMessage create: %w", err)
+		return sqlc.Message{}, fmt.Errorf("chat.SendMessage insert: %w", err)
 	}
-	for _, recipientID := range req.RecipientIDs {
+	for _, recipientPhone := range req.RecipientPhones {
 		_, _ = s.repo.AddConversationMember(ctx, sqlc.AddConversationMemberParams{
 			ConversationID: conversationID,
-			UserID:         recipientID,
+			UserPhone:      recipientPhone,
 		})
 	}
 	_, _ = s.repo.AddConversationMember(ctx, sqlc.AddConversationMemberParams{
 		ConversationID: conversationID,
-		UserID:         req.SenderID,
+		UserPhone:      req.SenderPhone,
 	})
-	receipt, _ := s.repo.UpsertReceipt(ctx, sqlc.UpsertReceiptParams{
+	_ = s.repo.UpsertReceipt(ctx, sqlc.UpsertReceiptParams{
 		MessageID: msg.ID,
-		UserID:    req.SenderID,
+		UserPhone: req.SenderPhone,
 		Status:    "sent",
 	})
 	ack := map[string]any{
 		"message_id":      msg.ID,
 		"conversation_id": msg.ConversationID,
-		"status":          receipt.Status,
+		"status":          "sent",
 		"body":            msg.Body,
 	}
 	data, err := ws.MarshalFrame(ws.Frame{
-		Type:    "message.sent",
-		TraceID: req.TraceID,
-		UserID:  req.SenderID,
-		Payload: ack,
+		Type:      "message.sent",
+		TraceID:   req.TraceID,
+		UserPhone: req.SenderPhone,
+		Payload:   ack,
 	})
 	if err != nil {
 		return sqlc.Message{}, fmt.Errorf("chat.SendMessage marshal: %w", err)
 	}
-	s.hub.Broadcast(ws.Outbound{Targets: []string{req.SenderID}, Data: data})
-	targets := append([]string{}, req.RecipientIDs...)
+	s.hub.Broadcast(ws.Outbound{Targets: []string{req.SenderPhone}, Data: data})
+	targets := append([]string{}, req.RecipientPhones...)
 	if len(targets) == 0 {
 		members, err := s.repo.ListConversationMembers(ctx, conversationID)
 		if err == nil {
 			for _, member := range members {
-				if member.UserID != req.SenderID {
-					targets = append(targets, member.UserID)
+				if member.UserPhone != req.SenderPhone {
+					targets = append(targets, member.UserPhone)
 				}
 			}
 		}
 	}
 	if len(targets) > 0 {
 		evt := &chatpb.Message{
-			MessageId:    msg.ID,
-			SenderId:     req.SenderID,
-			RecipientIds: targets,
-			Body:         msg.Body,
-			Status:       "sent",
+			MessageId:       msg.ID,
+			SenderPhone:     req.SenderPhone,
+			RecipientPhones: targets,
+			Body:            msg.Body,
+			Status:          "sent",
 		}
 		_ = s.bus.Publish(ctx, "events.chat", evt)
 		for _, target := range targets {
@@ -130,17 +131,14 @@ func (s *Service) SendMessage(ctx context.Context, req SendRequest) (sqlc.Messag
 }
 
 func (s *Service) MarkRead(ctx context.Context, req ReadRequest) error {
-	_, err := s.repo.UpsertReceipt(ctx, sqlc.UpsertReceiptParams{
+	_ = s.repo.UpsertReceipt(ctx, sqlc.UpsertReceiptParams{
 		MessageID: req.MessageID,
-		UserID:    req.UserID,
+		UserPhone: req.UserPhone,
 		Status:    "read",
 	})
-	if err != nil {
-		return fmt.Errorf("chat.MarkRead: %w", err)
-	}
 	evt := &chatpb.MarkStatusRequest{
 		MessageId: req.MessageID,
-		UserId:    req.UserID,
+		UserPhone: req.UserPhone,
 		Status:    "read",
 	}
 	_ = s.bus.Publish(ctx, "events.chat", evt)
@@ -153,13 +151,13 @@ func (s *Service) deliver(ctx context.Context, target string, msg sqlc.Message, 
 		online, _ = s.presence.IsOnline(ctx, target)
 	}
 	frame, err := ws.MarshalFrame(ws.Frame{
-		Type:    "message.delivered",
-		TraceID: traceID,
-		UserID:  target,
+		Type:      "message.delivered",
+		TraceID:   traceID,
+		UserPhone: target,
 		Payload: map[string]any{
 			"message_id":      msg.ID,
 			"conversation_id": msg.ConversationID,
-			"sender_id":       msg.SenderID,
+			"sender_phone":    msg.SenderPhone,
 			"body":            msg.Body,
 		},
 	})
@@ -168,9 +166,9 @@ func (s *Service) deliver(ctx context.Context, target string, msg sqlc.Message, 
 	}
 	if online {
 		s.hub.Broadcast(ws.Outbound{Targets: []string{target}, Data: frame})
-		_, _ = s.repo.UpsertReceipt(ctx, sqlc.UpsertReceiptParams{
+		_ = s.repo.UpsertReceipt(ctx, sqlc.UpsertReceiptParams{
 			MessageID: msg.ID,
-			UserID:    target,
+			UserPhone: target,
 			Status:    "delivered",
 		})
 		return
@@ -181,11 +179,11 @@ func (s *Service) deliver(ctx context.Context, target string, msg sqlc.Message, 
 	}
 }
 
-func (s *Service) DrainPending(ctx context.Context, userID string) error {
+func (s *Service) DrainPending(ctx context.Context, userPhone string) error {
 	if s.redis == nil {
 		return nil
 	}
-	key := inboxKey(userID)
+	key := inboxKey(userPhone)
 	for {
 		data, err := s.redis.RPop(ctx, key).Bytes()
 		if err == goredis.Nil {
@@ -194,13 +192,13 @@ func (s *Service) DrainPending(ctx context.Context, userID string) error {
 		if err != nil {
 			return fmt.Errorf("chat.DrainPending: %w", err)
 		}
-		s.hub.Broadcast(ws.Outbound{Targets: []string{userID}, Data: data})
+		s.hub.Broadcast(ws.Outbound{Targets: []string{userPhone}, Data: data})
 		frame, err := ws.UnmarshalFrame(data)
 		if err == nil {
 			if messageID, ok := frame.Payload["message_id"].(string); ok {
-				_, _ = s.repo.UpsertReceipt(ctx, sqlc.UpsertReceiptParams{
+				_ = s.repo.UpsertReceipt(ctx, sqlc.UpsertReceiptParams{
 					MessageID: messageID,
-					UserID:    userID,
+					UserPhone: userPhone,
 					Status:    "delivered",
 				})
 			}
@@ -219,6 +217,6 @@ func newID(prefix string) string {
 	return fmt.Sprintf("%s_%d", prefix, time.Now().UTC().UnixNano())
 }
 
-func inboxKey(userID string) string {
-	return "inbox:" + userID
+func inboxKey(userPhone string) string {
+	return "inbox:" + userPhone
 }

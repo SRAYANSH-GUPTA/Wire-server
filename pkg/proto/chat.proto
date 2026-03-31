@@ -7,8 +7,8 @@ option go_package = "wire-server/pkg/proto/chatpb";
 import "google/protobuf/timestamp.proto";
 
 message SendMessageRequest {
-  string sender_id = 1;
-  repeated string recipient_ids = 2;
+  string sender_phone = 1;
+  repeated string recipient_phones = 2;
   string group_id = 3;
   string body = 4;
   string trace_id = 5;
@@ -21,8 +21,8 @@ message SendMessageResponse {
 
 message Message {
   string message_id = 1;
-  string sender_id = 2;
-  repeated string recipient_ids = 3;
+  string sender_phone = 2;
+  repeated string recipient_phones = 3;
   string body = 4;
   string status = 5;
   google.protobuf.Timestamp created_at = 6;
@@ -41,7 +41,7 @@ message GetHistoryResponse {
 
 message MarkStatusRequest {
   string message_id = 1;
-  string user_id = 2;
+  string user_phone = 2;
   string status = 3;
 }
 
