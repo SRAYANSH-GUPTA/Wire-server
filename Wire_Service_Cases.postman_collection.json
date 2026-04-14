@@ -1,0 +1,195 @@
+{
+    "info": {
+        "name": "Wire Service WebSocket & Messaging",
+        "description": "Collection for testing WebSocket real-time delivery and REST messaging APIs.",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "item": [
+        {
+            "name": "WebSocket",
+            "item": [
+                {
+                    "name": "Connect to WebSocket",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "wss://{{domain}}/ws/connect",
+                            "protocol": "wss",
+                            "host": [
+                                "{{domain}}"
+                            ],
+                            "path": [
+                                "ws",
+                                "connect"
+                            ]
+                        },
+                        "description": "Establish a real-time connection to receive messages."
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Messages",
+            "item": [
+                {
+                    "name": "Send 1:1 Message",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"recipient_phone\": \"9760004227\",\n    \"body\": \"Hello from Postman!\",\n    \"type\": \"text\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "https://{{domain}}/api/v1/messages",
+                            "protocol": "https",
+                            "host": [
+                                "{{domain}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "messages"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Send Group Message",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"group_id\": \"{{group_id}}\",\n    \"body\": \"Hello Group!\",\n    \"type\": \"text\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "https://{{domain}}/api/v1/messages",
+                            "protocol": "https",
+                            "host": [
+                                "{{domain}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "messages"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Groups",
+            "item": [
+                {
+                    "name": "Create Group",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"name\": \"Test Group\",\n    \"description\": \"Group created via Postman\",\n    \"members\": [\n        \"9760004227\",\n        \"9999999999\"\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "https://{{domain}}/api/v1/groups",
+                            "protocol": "https",
+                            "host": [
+                                "{{domain}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "groups"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "List Groups",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "https://{{domain}}/api/v1/groups",
+                            "protocol": "https",
+                            "host": [
+                                "{{domain}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "groups"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        }
+    ],
+    "variable": [
+        {
+            "key": "domain",
+            "value": "wire.srayansh.in"
+        },
+        {
+            "key": "token",
+            "value": "YOUR_JWT_HERE"
+        },
+        {
+            "key": "group_id",
+            "value": "YOUR_GROUP_ID_HERE"
+        }
+    ]
+}

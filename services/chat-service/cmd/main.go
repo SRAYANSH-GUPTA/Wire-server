@@ -110,7 +110,7 @@ func main() {
 		log.Info("chat health server listening", zap.String("addr", ":"+healthPort))
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("health server failed", zap.Error(err))
-			stop()
+			// DO NOT stop entire service just because health check port is occupied
 		}
 	}()
 

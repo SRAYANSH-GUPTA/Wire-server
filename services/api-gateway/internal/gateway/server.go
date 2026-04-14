@@ -125,14 +125,17 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request) {
 	claims, _ := middleware.ClaimsFromContext(r.Context())
 	var body chatpb.SendMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.Logger.Error("invalid message payload", zap.Error(err))
 		writeError(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	body.SenderPhone = claims.Phone
-	
+
+	s.Logger.Debug("sending message to chat service", zap.Any("request", &body))
 	resp, err := s.GRPCClients.Chat.SendMessage(r.Context(), &body)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "grpc failed")
+		s.Logger.Error("chat service grpc failed", zap.Error(err), zap.String("sender", body.SenderPhone), zap.Any("recipients", body.RecipientPhones))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("grpc failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -145,7 +148,8 @@ func (s *Server) getMessage(w http.ResponseWriter, r *http.Request) {
 		Limit:          1,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "grpc failed")
+		s.Logger.Error("chat get history grpc failed", zap.Error(err), zap.String("conversation_id", id))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("grpc failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -163,7 +167,8 @@ func (s *Server) requestUpload(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.GRPCClients.Media.RequestUploadURL(r.Context(), &body)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "grpc failed")
+		s.Logger.Error("media upload grpc failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("grpc failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -181,7 +186,8 @@ func (s *Server) startCall(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.GRPCClients.Call.InitiateCall(r.Context(), &body)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "grpc failed")
+		s.Logger.Error("call initiate grpc failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("grpc failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -191,7 +197,8 @@ func (s *Server) getUser(w http.ResponseWriter, r *http.Request) {
 	phone := chi.URLParam(r, "phone")
 	resp, err := s.GRPCClients.User.GetUser(r.Context(), &userpb.GetUserRequest{UserPhone: phone})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "grpc failed")
+		s.Logger.Error("user get grpc failed", zap.Error(err), zap.String("phone", phone))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("grpc failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -201,7 +208,8 @@ func (s *Server) getPresence(w http.ResponseWriter, r *http.Request) {
 	phone := chi.URLParam(r, "phone")
 	resp, err := s.GRPCClients.Presence.GetPresence(r.Context(), &presencepb.GetPresenceRequest{UserPhone: phone})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "grpc failed")
+		s.Logger.Error("presence get grpc failed", zap.Error(err), zap.String("phone", phone))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("grpc failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)

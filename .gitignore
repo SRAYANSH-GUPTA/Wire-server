@@ -1,2 +1,8 @@
 .env
 ./infra/env
+api-gateway.env
+auth-service.env
+user-service.env
+chat-service.env
+media-service.env
+presence-service.env
