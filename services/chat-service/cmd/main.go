@@ -71,7 +71,7 @@ func main() {
 	chatSvc := newChatServer(primaryPool, replicaPool, rdb, bus, log)
 	chatSvc.startStatusConsumers(ctx)
 
-	grpcPort := os.Getenv("CHAT_SERVICE_PORT")
+	grpcPort := os.Getenv("GRPC_PORT")
 	if grpcPort == "" {
 		grpcPort = "8111"
 	}
@@ -83,7 +83,7 @@ func main() {
 	grpcServer := grpc.NewServer()
 	chatpb.RegisterChatServiceServer(grpcServer, chatSvc)
 
-	healthPort := os.Getenv("PORT")
+	healthPort := os.Getenv("CHAT_SERVICE_HEALTH_PORT")
 	if healthPort == "" {
 		healthPort = "8110"
 	}

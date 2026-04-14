@@ -94,7 +94,7 @@ func main() {
 		panic(err)
 	}
 
-	httpPort := envOr("PORT", "8610")
+	httpPort := envOr("USER_SERVICE_HEALTH_PORT", "8610")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
