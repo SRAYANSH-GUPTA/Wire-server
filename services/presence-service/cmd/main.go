@@ -112,7 +112,7 @@ func main() {
 	}()
 	go func() {
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			stop()
+			// DO NOT stop entire service just because health check port is occupied
 		}
 	}()
 

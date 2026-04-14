@@ -1,0 +1,2 @@
+{"level":"info","ts":"2026-04-13T20:09:57.924+0530","caller":"redis/client.go:32","msg":"redis connected","service_name":"api-gateway","addrs":"127.0.0.1:6379"}
+{"level":"info","ts":"2026-04-13T20:09:59.392+0530","caller":"cmd/main.go:94","msg":"http server starting","service_name":"api-gateway","addr":":8082"}

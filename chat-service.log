@@ -1,0 +1,4 @@
+{"level":"info","ts":"2026-04-13T20:10:04.998+0530","caller":"cmd/main.go:110","msg":"chat health server listening","service_name":"chat-service","addr":":8110"}
+{"level":"info","ts":"2026-04-13T20:10:04.998+0530","caller":"cmd/main.go:102","msg":"chat grpc server listening","service_name":"chat-service","addr":":8115"}
+{"level":"error","ts":"2026-04-13T20:10:04.998+0530","caller":"cmd/main.go:112","msg":"health server failed","service_name":"chat-service","error":"listen tcp :8110: bind: address already in use","stacktrace":"main.main.func3\n\t/home/srayansh/Documents/Golang/Wire-server/services/chat-service/cmd/main.go:112"}
+{"level":"info","ts":"2026-04-13T20:10:04.998+0530","caller":"cmd/main.go:122","msg":"chat-service stopped","service_name":"chat-service"}
